@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  nodewarden:
+    build:
+      context: .
+      dockerfile: Dockerfile.selfhosted
+    ports:
+      - "3000:3000"
+    environment:
+      - JWT_SECRET=${JWT_SECRET}
+      - TOTP_SECRET=${TOTP_SECRET:-}
+      - DATABASE_PATH=/app/data/nodewarden.db
+      - STORAGE_PATH=/app/data/attachments
+      - PORT=3000
+      - HOST=0.0.0.0
+    volumes:
+      - nodewarden-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  nodewarden-data:

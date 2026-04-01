@@ -1,0 +1,69 @@
+{
+  "name": "nodewarden",
+  "version": "1.4.2",
+  "description": "Minimal Bitwarden-compatible server running on Cloudflare Workers or Node.js",
+  "author": "shuaiplus",
+  "license": "LGPL-3.0",
+  "main": "src/index.ts",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev -c wrangler.toml",
+    "dev:kv": "wrangler dev -c wrangler.kv.toml",
+    "dev:selfhosted": "tsx src/selfhosted/index.ts",
+    "build": "vite build --config webapp/vite.config.ts",
+    "build:selfhosted": "tsc -p tsconfig.selfhosted.json",
+    "deploy": "wrangler deploy",
+    "deploy:kv": "wrangler deploy -c wrangler.kv.toml",
+    "start:selfhosted": "tsx src/selfhosted/index.ts"
+  },
+  "keywords": [
+    "bitwarden",
+    "vaultwarden",
+    "cloudflare",
+    "workers",
+    "password-manager"
+  ],
+  "cloudflare": {
+    "bindings": {
+      "JWT_SECRET": {
+        "description": "Use a strong random string (32+ characters recommended)"
+      },
+      "DB": {
+        "description": "D1 database for storing vault data"
+      },
+      "ATTACHMENTS": {
+        "description": "R2 bucket for storing file attachments"
+      },
+      "ATTACHMENTS_KV": {
+        "description": "Optional KV namespace fallback for attachment/send-file storage"
+      }
+    }
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260131.0",
+    "@preact/preset-vite": "^2.10.3",
+    "@types/node": "^25.2.3",
+    "@types/node-cron": "^3.0.11",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1",
+    "wrangler": "^4.71.0"
+  },
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "@libsql/client": "^0.14.0",
+    "@noble/hashes": "^2.0.1",
+    "@tanstack/react-query": "^5.90.21",
+    "@zip.js/zip.js": "^2.8.22",
+    "fflate": "^0.8.2",
+    "lucide-preact": "^0.575.0",
+    "node-cron": "^3.0.3",
+    "preact": "^10.28.4",
+    "qrcode-generator": "^2.0.4",
+    "wouter": "^3.9.0",
+    "ws": "^8.18.0"
+  }
+}

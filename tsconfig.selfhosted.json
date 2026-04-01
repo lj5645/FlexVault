@@ -1,0 +1,29 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "outDir": "./dist-selfhosted",
+    "rootDir": ".",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "types": ["node", "@cloudflare/workers-types"],
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "noEmit": false
+  },
+  "include": [
+    "src/**/*.ts",
+    "shared/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "dist-selfhosted",
+    "webapp"
+  ]
+}

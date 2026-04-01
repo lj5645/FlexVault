@@ -1,0 +1,42 @@
+name = "nodewarden"
+main = "src/worker.ts"
+compatibility_date = "2024-01-01"
+
+[observability]
+enabled = false
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+
+[assets]
+binding = "ASSETS"
+directory = "./dist"
+not_found_handling = "single-page-application"
+run_worker_first = false
+
+[build]
+command = "npm run build"
+
+[triggers]
+crons = [ "*/5 * * * *" ]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "nodewarden-db"
+
+[[durable_objects.bindings]]
+name = "NOTIFICATIONS_HUB"
+class_name = "NotificationsHub"
+
+[[kv_namespaces]]
+binding = "ATTACHMENTS_KV"
+
+[[migrations]]
+tag = "v1-notifications-hub"
+new_sqlite_classes = [ "NotificationsHub" ]

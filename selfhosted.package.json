@@ -1,0 +1,36 @@
+{
+  "name": "nodewarden-selfhosted",
+  "version": "1.4.2",
+  "description": "Self-hosted Bitwarden-compatible server - Node.js version",
+  "author": "shuaiplus",
+  "license": "LGPL-3.0",
+  "main": "dist/selfhosted/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.selfhosted.json",
+    "start": "node dist/selfhosted/index.js",
+    "dev": "tsx src/selfhosted/index.ts",
+    "build:frontend": "vite build --config webapp/vite.config.ts"
+  },
+  "keywords": [
+    "bitwarden",
+    "vaultwarden",
+    "password-manager",
+    "self-hosted"
+  ],
+  "dependencies": {
+    "@libsql/client": "^0.14.0",
+    "node-cron": "^3.0.3",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/node-cron": "^3.0.11",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+
+# Wrangler
+.wrangler/
+.dev.vars
+wrangler.my.toml
+RELEASE_NOTES.md
+tests/selfcheck.ts
+problem.md
+
+# Self-hosted data
+data/
+dist-selfhosted/
+
+# Build output
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# TypeScript
+*.tsbuildinfo
+
+# Package lock (optional - remove if you want to commit it)
+# package-lock.json
+
+tmp/
+.tmp/
+
+nodewarden.wiki/
