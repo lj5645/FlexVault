@@ -19,7 +19,7 @@
 
 ## 与 Bitwarden 官方服务端能力对比
 
-| 能力 | Bitwarden | FlexVault | 说明 |
+| 能力 | Bitwarden | NodeWarden | 说明 |
 |---|---|---|---|
 | 网页密码库 | ✅ | ✅ | **原创Web Vault界面** |
 | 全量同步 `/api/sync` | ✅ | ✅ | 已针对官方客户端做兼容优化 |
@@ -603,7 +603,6 @@ npm update
 - Bitwarden JSON
 - Bitwarden CSV
 - Bitwarden 密码库 + 附件 ZIP
-- FlexVault JSON
 - 网页导入器里可见的多种浏览器 / 密码管理器格式
 
 当前支持的导出方式包括：
@@ -611,7 +610,6 @@ npm update
 - Bitwarden JSON
 - Bitwarden 加密 JSON
 - 带附件的 ZIP 导出
-- FlexVault JSON 系列
 - 备份中心中的实例级完整手动导出
 
 ---
