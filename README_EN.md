@@ -1,32 +1,31 @@
 <p align="center">
-  <img src="./NodeWarden.png" alt="NodeWarden Logo" />
+  <img src="./NodeWarden.png" alt="FlexVault Logo" />
 </p>
 
 <p align="center">
-  A third-party Bitwarden-compatible server running on Cloudflare Workers.
+  Flexible Bitwarden-compatible password manager server - Supports both Cloudflare Workers and Node.js deployment
 </p>
+
 [![Powered by Cloudflare](https://img.shields.io/badge/Powered%20by-Cloudflare-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
 [![License: LGPL-3.0](https://img.shields.io/badge/License-LGPL--3.0-2ea44f)](./LICENSE)
-[![Latest Release](https://img.shields.io/github/v/release/shuaiplus/NodeWarden?display_name=tag)](https://github.com/shuaiplus/NodeWarden/releases/latest)
-[![Sync Upstream](https://github.com/shuaiplus/NodeWarden/actions/workflows/sync-upstream.yml/badge.svg)](https://github.com/shuaiplus/NodeWarden/actions/workflows/sync-upstream.yml)
-[Release Notes](./RELEASE_NOTES.md) | [Report an Issue](https://github.com/shuaiplus/NodeWarden/issues/new/choose) | [Latest Release](https://github.com/shuaiplus/NodeWarden/releases/latest)
-中文说明：[`README.md`](./README.md)
+
+[Report an Issue](https://github.com/lj5645/FlexVault/issues/new/choose)
 
 > **Disclaimer**
 >
 > This project is for learning and discussion purposes only. Please back up your vault regularly.
 >
-> This project is not affiliated with Bitwarden. Please do not report NodeWarden issues to the official Bitwarden team.
+> This project is not affiliated with Bitwarden. Please do not report FlexVault issues to the official Bitwarden team.
 
 ---
 
-## Feature Comparison with the Official Bitwarden Server
+## Feature Comparison with Official Bitwarden Server
 
-| Capability | Bitwarden | NodeWarden | Notes |
+| Capability | Bitwarden | FlexVault | Notes |
 |---|---|---|---|
 | Web Vault | ✅ | ✅ | **Original Web Vault interface** |
 | Full sync `/api/sync` | ✅ | ✅ | Compatibility optimized for official clients |
-| Attachment upload / download | ✅ | ✅ | Cloudflare R2 or KV |
+| Attachment upload / download | ✅ | ✅ | Cloudflare R2 / KV or local file system |
 | Send | ✅ | ✅ | Supports both text and file Sends |
 | Import / Export | ✅ | ✅ | Supports Bitwarden JSON / CSV / **ZIP import with attachments** |
 | **Cloud Backup Center** | ❌ | ✅ | **Scheduled backup to WebDAV / E3** |
@@ -49,28 +48,44 @@
 
 ---
 
-## Web Deploy
+## Deployment Methods
 
-1. Fork this repository. If this project helps you, consider giving it a Star.
-2. Open [Workers](https://dash.cloudflare.com/?to=/:account/workers-and-pages/create) -> `Continue with GitHub` -> select your forked repository (`NodeWarden`) -> continue.
-3. R2 is used by default. If R2 is not enabled on your account, you can use KV instead by changing the **deploy command** to `npm run deploy:kv`.
-4. Deploy and open the generated URL.
+FlexVault supports two deployment methods:
 
-| Storage | Card required | Single attachment / Send file limit | Free tier |
+| Deployment Method | Use Case | Advantages | Disadvantages |
 |---|---|---|---|
-| R2 | Yes | 100 MB (soft limit, adjustable) | 10 GB |
-| KV | No | 25 MiB (Cloudflare limit) | 1 GB |
+| **Cloudflare Workers** | Serverless, edge computing | Global CDN, auto-scaling, generous free tier | Requires Cloudflare account |
+| **Node.js Self-hosted** | Private servers, intranet deployment | Full control, no external dependencies | Requires server maintenance |
+
+---
+
+## Method 1: Cloudflare Workers Deployment
+
+### Web Deploy
+
+1. Fork the `FlexVault` repository to your GitHub account
+2. Go to [Cloudflare Workers creation page](https://dash.cloudflare.com/?to=/:account/workers-and-pages/create)
+3. Select `Continue with GitHub`
+4. Select your forked repository
+5. Continue with default configuration
+6. If you plan to use KV mode, change the deploy command to `npm run deploy:kv`
+7. After deployment completes, open the generated Workers URL
+8. Set `JWT_SECRET` as prompted. Do not use a temporary random value. This value is critical for token security - use at least 32 random characters in production.
 
 > [!TIP]
-> How to keep your fork updated:
-> - Manual: open your fork on GitHub, click `Sync fork`, then `Update branch`
-> - Automatic: go to your fork -> `Actions` -> `Sync upstream` -> `Enable workflow`; it will sync upstream automatically every day at 3 AM
+> Difference between default R2 and optional KV:
+>
+> | Storage | Card Required | Single attachment/Send file limit | Free Tier |
+> |---|---|---|---|
+> | R2 | Yes | 100 MB (soft limit, adjustable) | 10 GB |
+> | KV | No | 25 MiB (Cloudflare limit) | 1 GB |
 
-## CLI Deploy
+### CLI Deploy
 
 ```powershell
-git clone https://github.com/shuaiplus/NodeWarden.git
-cd NodeWarden
+git clone https://github.com/lj5645/FlexVault.git
+cd FlexVault
+
 npm install
 npx wrangler login
 
@@ -87,17 +102,500 @@ npm run dev:kv
 
 ---
 
+## Method 2: Node.js Self-hosted Deployment
+
+### Requirements
+
+| Requirement | Description |
+|---|---|
+| **Node.js** | >= 18.0.0 (LTS version recommended) |
+| **Operating System** | Windows / Linux / macOS |
+| **Disk Space** | At least 1GB (for database and attachment storage) |
+| **Memory** | 512MB or more recommended |
+
+---
+
+### Detailed Deployment Steps
+
+#### Step 1: Install Node.js
+
+**Windows:**
+
+1. Visit [Node.js official website](https://nodejs.org/)
+2. Download the LTS (Long Term Support) version installer
+3. Run the installer with default options
+4. Open PowerShell and verify installation:
+   ```powershell
+   node --version
+   npm --version
+   ```
+
+**Linux (Ubuntu/Debian):**
+
+```bash
+# Install Node.js 20 LTS using NodeSource
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# Verify installation
+node --version
+npm --version
+```
+
+**macOS:**
+
+```bash
+# Install using Homebrew
+brew install node
+
+# Verify installation
+node --version
+npm --version
+```
+
+---
+
+#### Step 2: Download Project Code
+
+**Option A: Clone with Git (Recommended)**
+
+```bash
+# Install Git if not already installed
+# Windows: Download from https://git-scm.com/download/win
+# Linux: sudo apt install git
+# macOS: brew install git
+
+# Clone the project
+git clone https://github.com/lj5645/FlexVault.git
+
+# Enter project directory
+cd FlexVault
+```
+
+**Option B: Download ZIP directly**
+
+1. Visit https://github.com/lj5645/FlexVault
+2. Click the green `Code` button → `Download ZIP`
+3. Extract the downloaded file
+4. Open terminal in the extracted directory
+
+---
+
+#### Step 3: Install Dependencies
+
+```bash
+# Run in project root directory
+npm install
+```
+
+Wait for dependencies to install, typically 1-3 minutes.
+
+---
+
+#### Step 4: Configure Environment Variables
+
+**Create configuration file:**
+
+```bash
+# Copy example configuration file
+cp .env.selfhosted.example .env
+```
+
+**Edit `.env` file:**
+
+Open the `.env` file with any text editor and configure the following parameters:
+
+```env
+# ============================================
+# Required Configuration
+# ============================================
+
+# JWT Secret - Used for signing authentication tokens
+# ⚠️ Important: Must be at least 32 characters, random string recommended
+# Generate with: openssl rand -base64 32
+# Or online: https://www.random.org/strings/
+JWT_SECRET=your-secure-jwt-secret-at-least-32-characters-long
+
+# ============================================
+# Optional Configuration (use defaults)
+# ============================================
+
+# TOTP Secret - Server-side two-factor authentication
+# TOTP_SECRET=your-totp-secret
+
+# Database storage path
+# Default: ./data/nodewarden.db
+DATABASE_PATH=./data/nodewarden.db
+
+# Attachment storage path
+# Default: ./data/attachments
+STORAGE_PATH=./data/attachments
+
+# Server listen port
+# Default: 3000
+PORT=3000
+
+# Server listen address
+# Default: 0.0.0.0 (listen on all interfaces)
+# Set to 127.0.0.1 for localhost only
+HOST=0.0.0.0
+
+# Frontend static files path (optional)
+# Set to built frontend path to serve Web Vault
+# FRONTEND_PATH=./dist
+```
+
+**Generate secure JWT_SECRET:**
+
+```bash
+# Linux/macOS
+openssl rand -base64 32
+
+# Or using Node.js
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
+
+---
+
+#### Step 5: Start the Server
+
+**Development mode (recommended for first test):**
+
+```bash
+npm run dev:selfhosted
+```
+
+Development mode features:
+- Automatically restarts on file changes
+- Shows detailed debug logs
+- Suitable for development and debugging
+
+**Production mode:**
+
+```bash
+npm run start:selfhosted
+```
+
+**Successful startup indicator:**
+
+```
+NodeWarden self-hosted server running at http://0.0.0.0:3000
+```
+
+---
+
+#### Step 6: Verify Service is Running
+
+**Test API endpoints:**
+
+```bash
+# Get server version
+curl http://localhost:3000/api/version
+
+# Get server configuration
+curl http://localhost:3000/api/config
+```
+
+**Expected response:**
+
+```json
+{
+  "version": "2026.1.0",
+  ...
+}
+```
+
+---
+
+#### Step 7: Configure Client
+
+Configure the self-hosted server in Bitwarden official client:
+
+1. Open Bitwarden client
+2. Click **Settings** (gear icon) in the top left
+3. Find **Server** settings
+4. Select **Self-hosted**
+5. Enter server URL: `http://your-server-ip:3000`
+6. Click Save
+
+**Supported clients:**
+- ✅ Windows desktop
+- ✅ macOS desktop
+- ✅ Linux desktop
+- ✅ iOS App
+- ✅ Android App
+- ✅ Browser extension
+
+---
+
+### Docker Deployment
+
+#### Using Docker Compose (Recommended)
+
+**1. Create configuration file:**
+
+```bash
+# Create .env file
+echo "JWT_SECRET=your-secure-jwt-secret-at-least-32-characters-long" > .env
+```
+
+**2. Start service:**
+
+```bash
+docker-compose -f docker-compose.selfhosted.yml up -d
+```
+
+**3. Check running status:**
+
+```bash
+docker-compose -f docker-compose.selfhosted.yml ps
+```
+
+**4. View logs:**
+
+```bash
+docker-compose -f docker-compose.selfhosted.yml logs -f
+```
+
+**5. Stop service:**
+
+```bash
+docker-compose -f docker-compose.selfhosted.yml down
+```
+
+#### Manual Docker Image Build
+
+```bash
+# Build image
+docker build -f Dockerfile.selfhosted -t flexvault .
+
+# Run container
+docker run -d \
+  --name flexvault \
+  -p 3000:3000 \
+  -e JWT_SECRET=your-secure-jwt-secret-at-least-32-characters-long \
+  -v flexvault-data:/app/data \
+  flexvault
+```
+
+---
+
+### Production Deployment Recommendations
+
+#### 1. Use HTTPS (Strongly Recommended)
+
+**Using Nginx reverse proxy:**
+
+```nginx
+# /etc/nginx/sites-available/flexvault.conf
+server {
+    listen 80;
+    server_name your-domain.com;
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name your-domain.com;
+
+    # SSL certificate configuration (using Let's Encrypt)
+    ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
+
+    # Security configuration
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256;
+    ssl_prefer_server_ciphers off;
+
+    # Upload file size limit
+    client_max_body_size 100M;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # WebSocket support
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+**Get free Let's Encrypt certificate:**
+
+```bash
+# Install Certbot
+sudo apt install certbot python3-certbot-nginx
+
+# Get certificate
+sudo certbot --nginx -d your-domain.com
+
+# Auto-renewal
+sudo certbot renew --dry-run
+```
+
+#### 2. Use Process Manager
+
+**Using PM2 (Recommended):**
+
+```bash
+# Install PM2
+npm install -g pm2
+
+# Start service
+pm2 start "npm run start:selfhosted" --name flexvault
+
+# View status
+pm2 status
+
+# View logs
+pm2 logs flexvault
+
+# Set up startup on boot
+pm2 startup
+pm2 save
+
+# Restart service
+pm2 restart flexvault
+
+# Stop service
+pm2 stop flexvault
+```
+
+**Using systemd (Linux):**
+
+Create service file `/etc/systemd/system/flexvault.service`:
+
+```ini
+[Unit]
+Description=FlexVault Password Manager
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/path/to/FlexVault
+ExecStart=/usr/bin/node /path/to/FlexVault/node_modules/.bin/tsx src/selfhosted/index.ts
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+# Start service
+sudo systemctl start flexvault
+
+# Enable startup on boot
+sudo systemctl enable flexvault
+
+# View status
+sudo systemctl status flexvault
+```
+
+#### 3. Data Backup
+
+```bash
+# Manual backup
+tar -czvf flexvault-backup-$(date +%Y%m%d).tar.gz data/
+
+# Scheduled backup (using crontab)
+crontab -e
+
+# Backup daily at 3 AM
+0 3 * * * cd /path/to/FlexVault && tar -czvf /backup/flexvault-$(date +\%Y\%m\%d).tar.gz data/
+```
+
+#### 4. Security Hardening
+
+```bash
+# Configure firewall (only open necessary ports)
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw allow 22/tcp
+sudo ufw enable
+
+# Regular dependency updates
+npm audit
+npm update
+```
+
+---
+
+## Architecture
+
+### Cloudflare Workers Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Cloudflare Edge Network                   │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │   Workers   │  │   D1 DB     │  │    R2 / KV          │  │
+│  │  (Compute)  │  │  (SQLite)   │  │   (Object Storage)  │  │
+│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │              Durable Objects (WebSocket Notifications)  ││
+│  └─────────────────────────────────────────────────────────┘│
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Node.js Self-hosted Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Node.js Server                          │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │  HTTP/WSS   │  │   SQLite    │  │    File System      │  │
+│  │  (Service)  │  │  (libsql)   │  │ (Attachment Storage)│  │
+│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │              WebSocket Server (Real-time Notifications) ││
+│  └─────────────────────────────────────────────────────────┘│
+│                                                              │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │              node-cron (Scheduled Backup Tasks)         ││
+│  └─────────────────────────────────────────────────────────┘│
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Feature Comparison
+
+| Feature | Cloudflare Workers | Node.js Self-hosted |
+|---|---|---|
+| Database | D1 (Distributed SQLite) | SQLite (libsql) |
+| File Storage | R2 / KV | Local file system |
+| Real-time Notifications | Durable Objects | WebSocket server |
+| Scheduled Tasks | Cron Triggers | node-cron |
+| Caching | Cache API | Memory cache |
+| Scalability | Auto-scaling | Manual scaling |
+| Cost | Free within tier | Server cost |
+
+---
+
 ## Cloud Backup Notes
 
 - Remote backup supports **WebDAV** and **E3**
 - When `Include attachments` is enabled:
-- the ZIP still contains only `db.json` and `manifest.json`
-- actual attachment files are stored separately under `attachments/`
-- later backups reuse existing attachments by stable blob name instead of re-uploading everything every time
+  - ZIP still contains only `db.json` and `manifest.json`
+  - Actual attachments are stored separately in `attachments/`
+  - Subsequent backups reuse existing attachments by stable blob name, no full re-upload
 - During remote restore:
-- required attachment files are loaded from `attachments/` on demand
-- missing attachments are skipped safely
-- skipped attachments do not leave broken rows in the restored database
+  - Required attachments are loaded from `attachments/` on demand
+  - Missing attachments are safely skipped
+  - Skipped attachments do not leave broken records in restored database
 
 ---
 
@@ -108,7 +606,7 @@ Current supported import sources include:
 - Bitwarden JSON
 - Bitwarden CSV
 - Bitwarden vault + attachments ZIP
-- NodeWarden JSON
+- FlexVault JSON
 - Multiple browser / password-manager formats available in the web import selector
 
 Current supported export formats include:
@@ -116,8 +614,158 @@ Current supported export formats include:
 - Bitwarden JSON
 - Bitwarden encrypted JSON
 - ZIP export with attachments
-- NodeWarden JSON variants
+- FlexVault JSON variants
 - Full manual instance export from the backup center
+
+---
+
+## Development
+
+### Project Structure
+
+```
+FlexVault/
+├── src/
+│   ├── index.ts              # Core business logic
+│   ├── worker.ts             # Cloudflare Workers entry
+│   ├── router.ts             # Route handling
+│   ├── handlers/             # Business handlers
+│   ├── services/             # Service layer
+│   ├── durable/              # Durable Objects
+│   │   ├── notifications-hub.ts  # Cloudflare DO
+│   │   └── notifications.ts      # Platform-agnostic notification functions
+│   └── selfhosted/           # Node.js adapter layer
+│       ├── index.ts          # Node.js entry
+│       ├── database.ts       # SQLite adapter
+│       ├── storage.ts        # File storage adapter
+│       ├── websocket.ts      # WebSocket server
+│       ├── cache-polyfill.ts # Memory cache
+│       └── env.ts            # Environment configuration
+├── webapp/                   # Frontend Web Vault
+├── migrations/               # Database migrations
+├── shared/                   # Shared code
+├── wrangler.toml             # Cloudflare config (R2)
+├── wrangler.kv.toml          # Cloudflare config (KV)
+├── tsconfig.selfhosted.json  # TypeScript config
+├── Dockerfile.selfhosted     # Docker build file
+└── docker-compose.selfhosted.yml
+```
+
+### Local Development Commands
+
+```bash
+# Cloudflare Workers development
+npm run dev          # R2 mode
+npm run dev:kv       # KV mode
+
+# Node.js self-hosted development
+npm run dev:selfhosted
+
+# Build frontend
+npm run build
+
+# Type check
+npm run build:selfhosted
+```
+
+---
+
+## Troubleshooting
+
+### Cloudflare Workers
+
+**Problem: Deployment failed**
+- Check if `wrangler.toml` configuration is correct
+- Ensure you are logged in with `npx wrangler login`
+
+**Problem: Database initialization failed**
+- Check if D1 database binding is correct
+- View Workers logs for detailed errors
+
+### Node.js Self-hosted
+
+**Problem: `JWT_SECRET` related errors**
+- Ensure `JWT_SECRET` in `.env` file is at least 32 characters
+
+**Problem: Database initialization failed**
+- Check if `DATABASE_PATH` has write permissions
+- Ensure directory exists or can be created
+
+**Problem: Attachment upload failed**
+- Check if `STORAGE_PATH` has write permissions
+- Check if disk space is sufficient
+
+**Problem: Client connection failed**
+- Confirm server is running
+- Check firewall settings
+- Confirm client configured server URL is correct
+
+**Problem: Port already in use**
+```bash
+# Check port usage (Linux/macOS)
+lsof -i :3000
+
+# Check port usage (Windows)
+netstat -ano | findstr :3000
+
+# Change port: modify PORT value in .env
+```
+
+---
+
+## Sync Upstream Updates
+
+FlexVault is based on [NodeWarden](https://github.com/shuaiplus/nodewarden). When the upstream project updates, you can sync with these steps:
+
+### Initial Setup (Only Once)
+
+```bash
+# Add upstream repository as remote source
+git remote add upstream https://github.com/shuaiplus/nodewarden.git
+
+# Verify remote source configuration
+git remote -v
+# You should see:
+# origin    https://github.com/lj5645/FlexVault.git (fetch)
+# origin    https://github.com/lj5645/FlexVault.git (push)
+# upstream  https://github.com/shuaiplus/nodewarden.git (fetch)
+# upstream  https://github.com/shuaiplus/nodewarden.git (push)
+```
+
+### Sync Update Process
+
+```bash
+# 1. Fetch upstream latest code
+git fetch upstream
+
+# 2. Switch to main branch
+git checkout main
+
+# 3. Merge upstream updates
+git merge upstream/main
+
+# 4. If there are conflicts, resolve and commit
+# Conflicted files will be marked, after manual editing:
+git add .
+git commit -m "merge: merge upstream updates"
+
+# 5. Push to your repository
+git push origin main
+```
+
+### Files That May Have Conflicts
+
+| File | Conflict Likelihood | Reason |
+|---|---|---|
+| `package.json` | High | Added self-hosted dependencies |
+| `src/index.ts` | Medium | Modified export structure |
+| `src/handlers/*.ts` | Medium | Changed import paths |
+| `src/selfhosted/*` | None | Independent new directory, no conflicts |
+
+### Conflict Resolution Suggestions
+
+1. **Keep your changes** - For `src/selfhosted/` directory, always keep your version
+2. **Merge dependencies** - For `package.json`, merge upstream new dependencies with your self-hosted dependencies
 
 ---
 
@@ -129,12 +777,4 @@ LGPL-3.0 License
 
 ## Credits
 
-- [Bitwarden](https://bitwarden.com/) - Original design and clients
-- [Vaultwarden](https://github.com/dani-garcia/vaultwarden) - Server implementation reference
-- [Cloudflare Workers](https://workers.cloudflare.com/) - Serverless platform
-
----
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=shuaiplus/NodeWarden&type=timeline&legend=top-left)](https://www.star-history.com/#shuaiplus/NodeWarden&type=timeline&legend=top-left)
+- [NodeWarden](https://github.com/shuaiplus/nodewarden) - Original NodeWarden project, this project adds Node.js self-hosted support based on it
