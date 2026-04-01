@@ -712,7 +712,7 @@ netstat -ano | findstr :3000
 
 ## 同步上游更新
 
-FlexVault 基于 [NodeWarden](https://github.com/shuaiplus/nodewarden) 开发，当上游项目更新时，你可以按以下步骤同步：
+FlexVault 基于 [NodeWarden](https://github.com/shuaiplus/nodewarden) 开发，当上游项目更新时，可以按以下步骤同步：
 
 ### 首次设置（只需执行一次）
 
@@ -746,7 +746,7 @@ git merge upstream/main
 git add .
 git commit -m "merge: 合并上游更新"
 
-# 5. 推送到你的仓库
+# 5. 推送到仓库
 git push origin main
 ```
 
@@ -755,7 +755,6 @@ git push origin main
 | 文件 | 冲突可能性 | 原因 |
 |------|-----------|------|
 | `package.json` | 高 | 添加了自托管依赖 |
-| `README.md` | 高 | 完全重写了 |
 | `src/index.ts` | 中 | 修改了导出结构 |
 | `src/handlers/*.ts` | 中 | 改变了 import 路径 |
 | `src/selfhosted/*` | 无 | 独立新增目录，不会冲突 |
@@ -764,7 +763,6 @@ git push origin main
 
 1. **保留你的修改** - 对于 `src/selfhosted/` 目录，始终保留你的版本
 2. **合并依赖** - 对于 `package.json`，合并上游的新依赖和你添加的自托管依赖
-3. **手动整合** - 对于 `README.md`，建议手动整合上游的新功能说明
 
 ---
 
@@ -776,7 +774,4 @@ LGPL-3.0 License
 
 ## 致谢
 
-- [Bitwarden](https://bitwarden.com/) - 原始设计与客户端
-- [Vaultwarden](https://github.com/dani-garcia/vaultwarden) - 服务端实现参考
-- [Cloudflare Workers](https://workers.cloudflare.com/) - 无服务器平台
-- [NodeWarden](https://github.com/shuaiplus/nodewarden) - 原 Cloudflare Workers 项目，本项目基于此添加了 Node.js 自托管支持
+- [NodeWarden](https://github.com/shuaiplus/nodewarden) - 原 NodeWarden 项目，本项目基于此添加了 Node.js 自托管支持
