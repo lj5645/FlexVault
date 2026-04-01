@@ -1,29 +1,25 @@
 <p align="center">
-  <img src="./NodeWarden.png" alt="NodeWarden Logo" />
+  <img src="./NodeWarden.png" alt="FlexVault Logo" />
 </p>
 
 <p align="center">
-  运行在 Cloudflare Workers 或 Node.js 上的第三方 Bitwarden 兼容服务端。
+  灵活的 Bitwarden 兼容密码管理服务端 - 支持 Cloudflare Workers 和 Node.js 双部署
 </p>
 
 [![Powered by Cloudflare](https://img.shields.io/badge/Powered%20by-Cloudflare-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
 [![License: LGPL-3.0](https://img.shields.io/badge/License-LGPL--3.0-2ea44f)](./LICENSE)
-[![Latest Release](https://img.shields.io/github/v/release/shuaiplus/NodeWarden?display_name=tag)](https://github.com/shuaiplus/NodeWarden/releases/latest)
-[![Sync Upstream](https://github.com/shuaiplus/NodeWarden/actions/workflows/sync-upstream.yml/badge.svg)](https://github.com/shuaiplus/NodeWarden/actions/workflows/sync-upstream.yml)
 
-[更新日志](./RELEASE_NOTES.md) | [提交问题](https://github.com/shuaiplus/NodeWarden/issues/new/choose) | [最新发布](https://github.com/shuaiplus/NodeWarden/releases/latest)
-
-English: [`README_EN.md`](./README_EN.md)
+[提交问题](https://github.com/lj5645/FlexVault/issues/new/choose)
 
 > **免责声明**  
 > 本项目仅供学习与交流使用，请定期备份你的密码库。  
-> 本项目与 Bitwarden 官方无关，请不要向 Bitwarden 官方反馈 NodeWarden 的问题。
+> 本项目与 Bitwarden 官方无关，请不要向 Bitwarden 官方反馈 FlexVault 的问题。
 
 ---
 
 ## 与 Bitwarden 官方服务端能力对比
 
-| 能力 | Bitwarden | NodeWarden | 说明 |
+| 能力 | Bitwarden | FlexVault | 说明 |
 |---|---|---|---|
 | 网页密码库 | ✅ | ✅ | **原创Web Vault界面** |
 | 全量同步 `/api/sync` | ✅ | ✅ | 已针对官方客户端做兼容优化 |
@@ -52,7 +48,7 @@ English: [`README_EN.md`](./README_EN.md)
 
 ## 部署方式
 
-NodeWarden 支持两种部署方式：
+FlexVault 支持两种部署方式：
 
 | 部署方式 | 适用场景 | 优势 | 劣势 |
 |---------|---------|------|------|
@@ -65,8 +61,8 @@ NodeWarden 支持两种部署方式：
 
 ### 网页部署
 
-1. Fork `NodeWarden` 仓库到自己的 GitHub 账号
-2. 进入  [Cloudflare Workers 创建页面](https://dash.cloudflare.com/?to=/:account/workers-and-pages/create)
+1. Fork `FlexVault` 仓库到自己的 GitHub 账号
+2. 进入 [Cloudflare Workers 创建页面](https://dash.cloudflare.com/?to=/:account/workers-and-pages/create)
 3. 选择 `Continue with GitHub`
 4. 选择你刚刚 Fork 的仓库
 5. 保持默认配置继续部署
@@ -84,8 +80,8 @@ NodeWarden 支持两种部署方式：
 ### CLI 部署
 
 ```powershell
-git clone https://github.com/shuaiplus/NodeWarden.git
-cd NodeWarden
+git clone https://github.com/lj5645/FlexVault.git
+cd FlexVault
 
 npm install
 npx wrangler login
@@ -101,129 +97,225 @@ npm run dev
 npm run dev:kv
 ```
 
-### 更新方法
-
-- **手动**：打开你 Fork 的 GitHub 仓库，看到顶部同步提示后，点击 `Sync fork` ➜ `Update branch`
-- **自动**：进入你的 Fork 仓库 ➜ `Actions` ➜ `Sync upstream` ➜ `Enable workflow`，会在每天凌晨 3 点自动同步上游。
-
 ---
 
 ## 方式二：Node.js 自托管部署
 
 ### 环境要求
 
-- Node.js >= 18.0.0
-- 支持 Windows / Linux / macOS
+| 要求 | 说明 |
+|------|------|
+| **Node.js** | >= 18.0.0（推荐使用 LTS 版本） |
+| **操作系统** | Windows / Linux / macOS |
+| **磁盘空间** | 至少 1GB（用于数据库和附件存储） |
+| **内存** | 建议 512MB 以上 |
 
-### 快速开始
+---
 
-#### 1. 克隆项目
+### 详细部署步骤
+
+#### 第一步：安装 Node.js
+
+**Windows 系统：**
+
+1. 访问 [Node.js 官网](https://nodejs.org/)
+2. 下载 LTS（长期支持）版本安装包
+3. 运行安装程序，保持默认选项即可
+4. 打开 PowerShell，验证安装：
+   ```powershell
+   node --version
+   npm --version
+   ```
+
+**Linux 系统（Ubuntu/Debian）：**
 
 ```bash
-git clone https://github.com/shuaiplus/NodeWarden.git
-cd NodeWarden
+# 使用 NodeSource 安装 Node.js 20 LTS
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# 验证安装
+node --version
+npm --version
 ```
 
-#### 2. 安装依赖
+**macOS 系统：**
 
 ```bash
+# 使用 Homebrew 安装
+brew install node
+
+# 验证安装
+node --version
+npm --version
+```
+
+---
+
+#### 第二步：下载项目代码
+
+**方式 A：使用 Git 克隆（推荐）**
+
+```bash
+# 安装 Git（如果没有）
+# Windows: 从 https://git-scm.com/download/win 下载安装
+# Linux: sudo apt install git
+# macOS: brew install git
+
+# 克隆项目
+git clone https://github.com/lj5645/FlexVault.git
+
+# 进入项目目录
+cd FlexVault
+```
+
+**方式 B：直接下载 ZIP**
+
+1. 访问 https://github.com/lj5645/FlexVault
+2. 点击绿色按钮 `Code` → `Download ZIP`
+3. 解压下载的文件
+4. 在终端中进入解压后的目录
+
+---
+
+#### 第三步：安装项目依赖
+
+```bash
+# 在项目根目录执行
 npm install
 ```
 
-#### 3. 配置环境变量
+等待依赖安装完成，通常需要 1-3 分钟。
 
-复制示例配置文件：
+---
+
+#### 第四步：配置环境变量
+
+**创建配置文件：**
 
 ```bash
+# 复制示例配置文件
 cp .env.selfhosted.example .env
 ```
 
-编辑 `.env` 文件，设置必要的配置：
+**编辑 `.env` 文件：**
+
+使用任意文本编辑器打开 `.env` 文件，配置以下参数：
 
 ```env
-# 必需：JWT 密钥（至少 32 个字符，建议使用随机字符串）
+# ============================================
+# 必需配置
+# ============================================
+
+# JWT 密钥 - 用于签名认证令牌
+# ⚠️ 重要：必须至少 32 个字符，建议使用随机字符串
+# 生成方法：openssl rand -base64 32
+# 或在线生成：https://www.random.org/strings/
 JWT_SECRET=your-secure-jwt-secret-at-least-32-characters-long
 
-# 可选：TOTP 密钥（服务器端 TOTP 功能）
+# ============================================
+# 可选配置（使用默认值即可）
+# ============================================
+
+# TOTP 密钥 - 服务器端两步验证功能
 # TOTP_SECRET=your-totp-secret
 
-# 数据库路径（默认：./data/nodewarden.db）
+# 数据库存储路径
+# 默认：./data/nodewarden.db
 DATABASE_PATH=./data/nodewarden.db
 
-# 附件存储路径（默认：./data/attachments）
+# 附件存储路径
+# 默认：./data/attachments
 STORAGE_PATH=./data/attachments
 
-# 服务器端口（默认：3000）
+# 服务器监听端口
+# 默认：3000
 PORT=3000
 
-# 服务器主机（默认：0.0.0.0）
+# 服务器监听地址
+# 默认：0.0.0.0（监听所有网卡）
+# 如仅本机访问可设为 127.0.0.1
 HOST=0.0.0.0
 
-# 可选：前端静态文件路径（用于服务 Web 应用）
+# 前端静态文件路径（可选）
+# 如果需要服务 Web Vault 界面，设置构建后的前端路径
 # FRONTEND_PATH=./dist
 ```
 
-#### 4. 启动服务器
+**生成安全的 JWT_SECRET：**
 
-**开发模式**（自动重启）：
+```bash
+# Linux/macOS
+openssl rand -base64 32
+
+# 或使用 Node.js
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
+
+---
+
+#### 第五步：启动服务器
+
+**开发模式（推荐首次测试）：**
 
 ```bash
 npm run dev:selfhosted
 ```
 
-**生产模式**：
+开发模式特点：
+- 自动监听文件变化并重启
+- 显示详细调试日志
+- 适合开发和调试
+
+**生产模式：**
 
 ```bash
 npm run start:selfhosted
 ```
 
-服务器启动后会显示：
+**启动成功标志：**
 
 ```
 NodeWarden self-hosted server running at http://0.0.0.0:3000
 ```
 
-### Docker 部署
+---
 
-#### 使用 Docker Compose（推荐）
+#### 第六步：验证服务运行
 
-1. 创建 `.env` 文件：
-
-```env
-JWT_SECRET=your-secure-jwt-secret-at-least-32-characters-long
-```
-
-2. 启动服务：
+**测试 API 接口：**
 
 ```bash
-docker-compose -f docker-compose.selfhosted.yml up -d
+# 获取服务器版本
+curl http://localhost:3000/api/version
+
+# 获取服务器配置
+curl http://localhost:3000/api/config
 ```
 
-3. 查看日志：
+**预期返回：**
 
-```bash
-docker-compose -f docker-compose.selfhosted.yml logs -f
+```json
+{
+  "version": "2026.1.0",
+  ...
+}
 ```
 
-#### 手动构建 Docker 镜像
+---
 
-```bash
-docker build -f Dockerfile.selfhosted -t nodewarden-selfhosted .
-docker run -d -p 3000:3000 \
-  -e JWT_SECRET=your-secure-jwt-secret-at-least-32-characters-long \
-  -v nodewarden-data:/app/data \
-  nodewarden-selfhosted
-```
+#### 第七步：配置客户端
 
-### 客户端配置
+在 Bitwarden 官方客户端中配置自托管服务器：
 
-在 Bitwarden 官方客户端中，将服务器 URL 设置为你的自托管服务器地址：
+1. 打开 Bitwarden 客户端
+2. 点击左上角 **设置**（齿轮图标）
+3. 找到 **服务器** 设置
+4. 选择 **自托管**
+5. 输入服务器 URL：`http://你的服务器IP:3000`
+6. 点击保存
 
-```
-http://your-server-ip:3000
-```
-
-支持的客户端：
+**支持的客户端：**
 - ✅ Windows 桌面端
 - ✅ macOS 桌面端
 - ✅ Linux 桌面端
@@ -231,28 +323,68 @@ http://your-server-ip:3000
 - ✅ Android App
 - ✅ 浏览器扩展
 
-### 生产环境建议
+---
 
-1. **使用 HTTPS**
-   - 配置反向代理（如 Nginx、Caddy）
-   - 启用 SSL/TLS 证书（推荐 Let's Encrypt）
+### Docker 部署
 
-2. **数据备份**
-   - 定期备份 `data/` 目录
-   - 使用内置的云端备份功能（WebDAV / E3）
+#### 使用 Docker Compose（推荐）
 
-3. **进程管理**
-   - 使用 PM2 或 systemd 管理进程
-   - 配置自动重启和日志收集
+**1. 创建配置文件：**
 
-4. **安全加固**
-   - 使用防火墙限制访问
-   - 定期更新依赖包
-   - 使用强随机 JWT_SECRET
+```bash
+# 创建 .env 文件
+echo "JWT_SECRET=your-secure-jwt-secret-at-least-32-characters-long" > .env
+```
 
-### Nginx 反向代理配置示例
+**2. 启动服务：**
+
+```bash
+docker-compose -f docker-compose.selfhosted.yml up -d
+```
+
+**3. 查看运行状态：**
+
+```bash
+docker-compose -f docker-compose.selfhosted.yml ps
+```
+
+**4. 查看日志：**
+
+```bash
+docker-compose -f docker-compose.selfhosted.yml logs -f
+```
+
+**5. 停止服务：**
+
+```bash
+docker-compose -f docker-compose.selfhosted.yml down
+```
+
+#### 手动构建 Docker 镜像
+
+```bash
+# 构建镜像
+docker build -f Dockerfile.selfhosted -t flexvault .
+
+# 运行容器
+docker run -d \
+  --name flexvault \
+  -p 3000:3000 \
+  -e JWT_SECRET=your-secure-jwt-secret-at-least-32-characters-long \
+  -v flexvault-data:/app/data \
+  flexvault
+```
+
+---
+
+### 生产环境部署建议
+
+#### 1. 使用 HTTPS（强烈推荐）
+
+**使用 Nginx 反向代理：**
 
 ```nginx
+# /etc/nginx/sites-available/flexvault.conf
 server {
     listen 80;
     server_name your-domain.com;
@@ -263,9 +395,16 @@ server {
     listen 443 ssl http2;
     server_name your-domain.com;
 
-    ssl_certificate /path/to/fullchain.pem;
-    ssl_certificate_key /path/to/privkey.pem;
+    # SSL 证书配置（使用 Let's Encrypt）
+    ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
 
+    # 安全配置
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256;
+    ssl_prefer_server_ciphers off;
+
+    # 上传文件大小限制
     client_max_body_size 100M;
 
     location / {
@@ -283,24 +422,104 @@ server {
 }
 ```
 
-### PM2 进程管理
+**获取 Let's Encrypt 免费证书：**
+
+```bash
+# 安装 Certbot
+sudo apt install certbot python3-certbot-nginx
+
+# 获取证书
+sudo certbot --nginx -d your-domain.com
+
+# 自动续期
+sudo certbot renew --dry-run
+```
+
+#### 2. 使用进程管理器
+
+**使用 PM2（推荐）：**
 
 ```bash
 # 安装 PM2
 npm install -g pm2
 
 # 启动服务
-pm2 start "npm run start:selfhosted" --name nodewarden
-
-# 设置开机自启
-pm2 startup
-pm2 save
+pm2 start "npm run start:selfhosted" --name flexvault
 
 # 查看状态
 pm2 status
 
 # 查看日志
-pm2 logs nodewarden
+pm2 logs flexvault
+
+# 设置开机自启
+pm2 startup
+pm2 save
+
+# 重启服务
+pm2 restart flexvault
+
+# 停止服务
+pm2 stop flexvault
+```
+
+**使用 systemd（Linux）：**
+
+创建服务文件 `/etc/systemd/system/flexvault.service`：
+
+```ini
+[Unit]
+Description=FlexVault Password Manager
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/path/to/FlexVault
+ExecStart=/usr/bin/node /path/to/FlexVault/node_modules/.bin/tsx src/selfhosted/index.ts
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+# 启动服务
+sudo systemctl start flexvault
+
+# 开机自启
+sudo systemctl enable flexvault
+
+# 查看状态
+sudo systemctl status flexvault
+```
+
+#### 3. 数据备份
+
+```bash
+# 手动备份
+tar -czvf flexvault-backup-$(date +%Y%m%d).tar.gz data/
+
+# 定时备份（使用 crontab）
+crontab -e
+
+# 每天凌晨 3 点备份
+0 3 * * * cd /path/to/FlexVault && tar -czvf /backup/flexvault-$(date +\%Y\%m\%d).tar.gz data/
+```
+
+#### 4. 安全加固
+
+```bash
+# 配置防火墙（仅开放必要端口）
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw allow 22/tcp
+sudo ufw enable
+
+# 定期更新依赖
+npm audit
+npm update
 ```
 
 ---
@@ -384,7 +603,7 @@ pm2 logs nodewarden
 - Bitwarden JSON
 - Bitwarden CSV
 - Bitwarden 密码库 + 附件 ZIP
-- NodeWarden JSON
+- FlexVault JSON
 - 网页导入器里可见的多种浏览器 / 密码管理器格式
 
 当前支持的导出方式包括：
@@ -392,7 +611,7 @@ pm2 logs nodewarden
 - Bitwarden JSON
 - Bitwarden 加密 JSON
 - 带附件的 ZIP 导出
-- NodeWarden JSON 系列
+- FlexVault JSON 系列
 - 备份中心中的实例级完整手动导出
 
 ---
@@ -402,7 +621,7 @@ pm2 logs nodewarden
 ### 项目结构
 
 ```
-NodeWarden/
+FlexVault/
 ├── src/
 │   ├── index.ts              # 核心业务逻辑
 │   ├── worker.ts             # Cloudflare Workers 入口
@@ -478,6 +697,17 @@ npm run build:selfhosted
 - 检查防火墙设置
 - 确认客户端配置的服务器 URL 正确
 
+**问题：端口被占用**
+```bash
+# 查看端口占用（Linux/macOS）
+lsof -i :3000
+
+# 查看端口占用（Windows）
+netstat -ano | findstr :3000
+
+# 更换端口：修改 .env 中的 PORT 值
+```
+
 ---
 
 ## 开源协议
@@ -491,9 +721,4 @@ LGPL-3.0 License
 - [Bitwarden](https://bitwarden.com/) - 原始设计与客户端
 - [Vaultwarden](https://github.com/dani-garcia/vaultwarden) - 服务端实现参考
 - [Cloudflare Workers](https://workers.cloudflare.com/) - 无服务器平台
-
----
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=shuaiplus/NodeWarden&type=timeline&legend=top-left)](https://www.star-history.com/#shuaiplus/NodeWarden&type=timeline&legend=top-left)
+- [NodeWarden](https://github.com/shuaiplus/nodewarden) - 原 Cloudflare Workers 项目，本项目基于此添加了 Node.js 自托管支持
