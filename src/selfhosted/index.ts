@@ -11,9 +11,6 @@ if (typeof (globalThis as unknown as { crypto?: unknown }).crypto === 'undefined
 
 import './cache-polyfill';
 import { loadConfigFromEnv, createEnv, setupNotificationsHub, createAssetsHandler, SelfHostedEnv } from './env';
-import { SQLiteD1Adapter } from './database';
-import { FileSystemR2Adapter } from './storage';
-import { NotificationsHubNamespace } from './websocket';
 import { StorageService } from '../services/storage';
 import { handleRequest } from '../router';
 import { applyCors } from '../utils/response';

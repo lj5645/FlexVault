@@ -28,10 +28,9 @@ export async function loadVaultCoreSyncSnapshot(authedFetch: AuthedFetch): Promi
 
   pendingVaultCoreRequests.set(authedFetch, request);
   try {
-    return await request;
+    const result = await request;
+    return result;
   } finally {
-    if (pendingVaultCoreRequests.get(authedFetch) === request) {
-      pendingVaultCoreRequests.delete(authedFetch);
-    }
+    pendingVaultCoreRequests.delete(authedFetch);
   }
 }

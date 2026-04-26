@@ -325,7 +325,7 @@ export class FileSystemR2Adapter {
         } else {
           if (prefix && !key.startsWith(prefix)) continue;
 
-          const stat = await fs.stat(fullPath);
+          const _stat = await fs.stat(fullPath);
           const metadataPath = this.getMetadataPath(key);
           let metadata: {
             httpMetadata?: R2HTTPMetadata;

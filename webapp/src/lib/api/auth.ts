@@ -148,7 +148,7 @@ export function stripProfileSecrets(profile: Profile | null): Profile | null {
     email: String(profile.email || ''),
     name: String(profile.name || ''),
     role: profile.role === 'admin' ? 'admin' : 'user',
-    masterPasswordHint: profile.masterPasswordHint ?? null,
+    masterPasswordHint: null,
     publicKey: profile.publicKey ?? null,
     key: '',
     privateKey: null,
