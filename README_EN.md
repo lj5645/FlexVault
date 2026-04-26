@@ -330,7 +330,51 @@ Configure the self-hosted server in Bitwarden official client:
 
 ### Docker Deployment
 
-#### Using Docker Compose (Recommended)
+#### Using Aliyun Image (Recommended)
+
+Pull the pre-built image directly, no local build required:
+
+```bash
+# Pull image
+docker pull registry.cn-guangzhou.aliyuncs.com/myskyts/flexvault:latest
+
+# Run container
+docker run -d \
+  --name flexvault \
+  -p 3000:3000 \
+  -e JWT_SECRET=your-secure-jwt-secret-at-least-32-characters-long \
+  -v flexvault-data:/app/data \
+  registry.cn-guangzhou.aliyuncs.com/myskyts/flexvault:latest
+```
+
+**Using Docker Compose:**
+
+Create `docker-compose.yml` file:
+
+```yaml
+version: '3.8'
+services:
+  flexvault:
+    image: registry.cn-guangzhou.aliyuncs.com/myskyts/flexvault:latest
+    container_name: flexvault
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - JWT_SECRET=your-secure-jwt-secret-at-least-32-characters-long
+    volumes:
+      - flexvault-data:/app/data
+
+volumes:
+  flexvault-data:
+```
+
+```bash
+# Start service
+docker-compose up -d
+```
+
+#### Using Docker Compose (Build from Source)
 
 **1. Create configuration file:**
 

@@ -327,7 +327,51 @@ curl http://localhost:3000/api/config
 
 ### Docker 部署
 
-#### 使用 Docker Compose（推荐）
+#### 使用阿里云镜像（推荐）
+
+直接拉取预构建的镜像，无需本地编译：
+
+```bash
+# 拉取镜像
+docker pull registry.cn-guangzhou.aliyuncs.com/myskyts/flexvault:latest
+
+# 运行容器
+docker run -d \
+  --name flexvault \
+  -p 3000:3000 \
+  -e JWT_SECRET=your-secure-jwt-secret-at-least-32-characters-long \
+  -v flexvault-data:/app/data \
+  registry.cn-guangzhou.aliyuncs.com/myskyts/flexvault:latest
+```
+
+**使用 Docker Compose：**
+
+创建 `docker-compose.yml` 文件：
+
+```yaml
+version: '3.8'
+services:
+  flexvault:
+    image: registry.cn-guangzhou.aliyuncs.com/myskyts/flexvault:latest
+    container_name: flexvault
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - JWT_SECRET=your-secure-jwt-secret-at-least-32-characters-long
+    volumes:
+      - flexvault-data:/app/data
+
+volumes:
+  flexvault-data:
+```
+
+```bash
+# 启动服务
+docker-compose up -d
+```
+
+#### 使用 Docker Compose（从源码构建）
 
 **1. 创建配置文件：**
 
