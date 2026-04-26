@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks';
+﻿import { useState } from 'preact/hooks';
 import { argon2idAsync } from '@noble/hashes/argon2.js';
 import { createPortal } from 'preact/compat';
 import { strFromU8, unzipSync } from 'fflate';
@@ -567,8 +567,10 @@ export default function ImportPage({ onImport, onImportEncryptedRaw, accountKeys
       return;
     }
     await runExportWithMasterPassword(masterPassword);
-    setExportAuthPassword('');
-    setExportAuthDialogOpen(false);
+    if (!isExporting) {
+      setExportAuthPassword('');
+      setExportAuthDialogOpen(false);
+    }
   }
 
   function handleExport() {

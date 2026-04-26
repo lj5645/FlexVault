@@ -160,6 +160,13 @@ export default function SettingsPage(props: SettingsPageProps) {
         ? t('txt_rotate_api_key')
         : t('txt_view_api_key');
 
+  function formatDateTime(value: string | null | undefined): string {
+    if (!value) return t('txt_dash');
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return value;
+    return parsed.toLocaleString();
+  }
+
   return (
     <div className="settings-modules-grid">
       <section className="card settings-module">
