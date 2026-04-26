@@ -8,11 +8,13 @@ function mapDeviceRow(row: any): Device {
     userId: row.user_id,
     deviceIdentifier: row.device_identifier,
     name: row.name,
+    deviceNote: row.device_note ?? null,
     type: row.type,
     sessionStamp: row.session_stamp || '',
     encryptedUserKey: row.encrypted_user_key ?? null,
     encryptedPublicKey: row.encrypted_public_key ?? null,
     encryptedPrivateKey: row.encrypted_private_key ?? null,
+    lastSeenAt: row.last_seen_at ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -33,29 +35,60 @@ export async function upsertDevice(
   }
 ): Promise<void> {
   const now = new Date().toISOString();
-  const effectiveSessionStamp = String(sessionStamp || '').trim() || (await getDeviceById(userId, deviceIdentifier))?.sessionStamp || '';
+  const existingDevice = await getDeviceById(userId, deviceIdentifier);
+  const effectiveSessionStamp = String(sessionStamp || '').trim() || existingDevice?.sessionStamp || '';
+  const effectiveName = String(name || '').trim() || String(existingDevice?.name || '').trim();
   await db
     .prepare(
-      'INSERT INTO devices(user_id, device_identifier, name, type, session_stamp, encrypted_user_key, encrypted_public_key, encrypted_private_key, banned, banned_at, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?) ' +
+      'INSERT INTO devices(user_id, device_identifier, name, type, session_stamp, encrypted_user_key, encrypted_public_key, encrypted_private_key, banned, banned_at, device_note, last_seen_at, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?) ' +
         'ON CONFLICT(user_id, device_identifier) DO UPDATE SET name=excluded.name, type=excluded.type, session_stamp=excluded.session_stamp, ' +
         'encrypted_user_key=COALESCE(excluded.encrypted_user_key, encrypted_user_key), ' +
         'encrypted_public_key=COALESCE(excluded.encrypted_public_key, encrypted_public_key), ' +
         'encrypted_private_key=COALESCE(excluded.encrypted_private_key, encrypted_private_key), ' +
+        'last_seen_at=excluded.last_seen_at, ' +
         'updated_at=excluded.updated_at'
     )
     .bind(
       userId,
       deviceIdentifier,
-      name,
+      effectiveName,
       type,
       effectiveSessionStamp,
       keys?.encryptedUserKey ?? null,
       keys?.encryptedPublicKey ?? null,
       keys?.encryptedPrivateKey ?? null,
+      existingDevice?.deviceNote ?? null,
+      now,
       now,
       now
     )
     .run();
+}
+
+export async function updateDeviceName(
+  db: D1Database,
+  userId: string,
+  deviceIdentifier: string,
+  name: string
+): Promise<boolean> {
+  const result = await db
+    .prepare('UPDATE devices SET device_note = ? WHERE user_id = ? AND device_identifier = ?')
+    .bind(String(name || '').trim(), userId, deviceIdentifier)
+    .run();
+  return Number(result.meta.changes ?? 0) > 0;
+}
+
+export async function touchDeviceLastSeen(
+  db: D1Database,
+  userId: string,
+  deviceIdentifier: string
+): Promise<boolean> {
+  const now = new Date().toISOString();
+  const result = await db
+    .prepare('UPDATE devices SET last_seen_at = ? WHERE user_id = ? AND device_identifier = ?')
+    .bind(now, userId, deviceIdentifier)
+    .run();
+  return Number(result.meta.changes ?? 0) > 0;
 }
 
 export async function updateDeviceKeys(
@@ -133,8 +166,8 @@ export async function isKnownDeviceByEmail(
 export async function getDevicesByUserId(db: D1Database, userId: string): Promise<Device[]> {
   const res = await db
     .prepare(
-      'SELECT user_id, device_identifier, name, type, session_stamp, encrypted_user_key, encrypted_public_key, encrypted_private_key, banned, banned_at, created_at, updated_at ' +
-        'FROM devices WHERE user_id = ? ORDER BY updated_at DESC'
+      'SELECT user_id, device_identifier, name, type, session_stamp, encrypted_user_key, encrypted_public_key, encrypted_private_key, banned, banned_at, device_note, last_seen_at, created_at, updated_at ' +
+        'FROM devices WHERE user_id = ? ORDER BY COALESCE(last_seen_at, created_at) DESC, updated_at DESC'
     )
     .bind(userId)
     .all<any>();
@@ -144,7 +177,7 @@ export async function getDevicesByUserId(db: D1Database, userId: string): Promis
 export async function getDevice(db: D1Database, userId: string, deviceIdentifier: string): Promise<Device | null> {
   const row = await db
     .prepare(
-      'SELECT user_id, device_identifier, name, type, session_stamp, encrypted_user_key, encrypted_public_key, encrypted_private_key, banned, banned_at, created_at, updated_at ' +
+      'SELECT user_id, device_identifier, name, type, session_stamp, encrypted_user_key, encrypted_public_key, encrypted_private_key, banned, banned_at, device_note, last_seen_at, created_at, updated_at ' +
         'FROM devices WHERE user_id = ? AND device_identifier = ? LIMIT 1'
     )
     .bind(userId, deviceIdentifier)

@@ -1,5 +1,9 @@
+import { useMemo } from 'preact/hooks';
+import type { RefObject } from 'preact';
 import {
   Archive,
+  ArrowUpDown,
+  Check,
   Copy,
   CreditCard,
   Folder as FolderIcon,
@@ -17,7 +21,7 @@ import {
 } from 'lucide-preact';
 import type { Folder } from '@/lib/types';
 import { t } from '@/lib/i18n';
-import type { SidebarFilter } from '@/components/vault/vault-page-helpers';
+import { FOLDER_SORT_OPTIONS, type SidebarFilter, type VaultSortMode } from '@/components/vault/vault-page-helpers';
 
 interface VaultSidebarProps {
   folders: Folder[];
@@ -25,15 +29,53 @@ interface VaultSidebarProps {
   busy: boolean;
   isMobileLayout: boolean;
   mobileSidebarOpen: boolean;
+  folderSortMode: VaultSortMode;
+  folderSortMenuOpen: boolean;
+  folderSortMenuRef: RefObject<HTMLDivElement>;
   onCloseMobileSidebar: () => void;
   onChangeFilter: (filter: SidebarFilter) => void;
   onOpenDeleteAllFolders: () => void;
   onOpenCreateFolder: () => void;
   onOpenRenameFolder: (folder: Folder) => void;
   onOpenDeleteFolder: (folder: Folder) => void;
+  onToggleFolderSortMenu: () => void;
+  onSelectFolderSortMode: (value: VaultSortMode) => void;
 }
 
 export default function VaultSidebar(props: VaultSidebarProps) {
+  const sortedFolders = useMemo(() => {
+    const sorted = [...props.folders];
+    sorted.sort((a, b) => {
+      if (props.folderSortMode === 'edited') {
+        const aTime = new Date(String(a.revisionDate || a.creationDate || '')).getTime();
+        const bTime = new Date(String(b.revisionDate || b.creationDate || '')).getTime();
+        const aValid = Number.isFinite(aTime);
+        const bValid = Number.isFinite(bTime);
+        if (aValid && bValid) {
+          const diff = bTime - aTime;
+          if (diff !== 0) return diff;
+        }
+        if (aValid !== bValid) return aValid ? -1 : 1;
+      } else if (props.folderSortMode === 'created') {
+        const aTime = new Date(String(a.creationDate || '')).getTime();
+        const bTime = new Date(String(b.creationDate || '')).getTime();
+        const aValid = Number.isFinite(aTime);
+        const bValid = Number.isFinite(bTime);
+        if (aValid && bValid) {
+          const diff = bTime - aTime;
+          if (diff !== 0) return diff;
+        }
+        if (aValid !== bValid) return aValid ? -1 : 1;
+      }
+      const nameDiff = String(a.decName || a.name || '').localeCompare(
+        String(b.decName || b.name || ''), undefined, { sensitivity: 'base', numeric: true }
+      );
+      if (nameDiff !== 0) return nameDiff;
+      return String(a.id || '').localeCompare(String(b.id || ''));
+    });
+    return sorted;
+  }, [props.folders, props.folderSortMode]);
+
   return (
     <aside className={`sidebar ${props.isMobileLayout ? 'mobile-sidebar-sheet' : ''} ${props.isMobileLayout && props.mobileSidebarOpen ? 'open' : ''}`}>
       {props.isMobileLayout && (
@@ -85,6 +127,32 @@ export default function VaultSidebar(props: VaultSidebarProps) {
         <div className="sidebar-title-row">
           <div className="sidebar-title">{t('txt_folders')}</div>
           <div className="folder-title-actions">
+            <div className="sort-menu-wrap" ref={props.folderSortMenuRef}>
+              <button
+                type="button"
+                className={`folder-sort-btn ${props.folderSortMenuOpen ? 'active' : ''}`}
+                title={t('txt_sort')}
+                aria-label={t('txt_sort')}
+                onClick={props.onToggleFolderSortMenu}
+              >
+                <ArrowUpDown size={13} />
+              </button>
+              {props.folderSortMenuOpen && (
+                <div className="sort-menu">
+                  {FOLDER_SORT_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`sort-menu-item ${props.folderSortMode === option.value ? 'active' : ''}`}
+                      onClick={() => props.onSelectFolderSortMode(option.value)}
+                    >
+                      <span>{option.label}</span>
+                      {props.folderSortMode === option.value ? <Check size={14} /> : <span className="sort-menu-check-placeholder" />}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <button
               type="button"
               className="folder-delete-btn"
@@ -103,7 +171,7 @@ export default function VaultSidebar(props: VaultSidebarProps) {
         <button type="button" className={`tree-btn ${props.sidebarFilter.kind === 'folder' && props.sidebarFilter.folderId === null ? 'active' : ''}`} onClick={() => props.onChangeFilter({ kind: 'folder', folderId: null })}>
           <FolderX size={14} className="tree-icon" /> <span className="tree-label">{t('txt_no_folder')}</span>
         </button>
-        {props.folders.map((folder) => (
+        {sortedFolders.map((folder) => (
           <div key={folder.id} className="folder-row">
             <button
               type="button"

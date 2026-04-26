@@ -42,10 +42,8 @@ export default defineConfig({
             normalized.includes('/src/components/ImportPage.tsx') ||
             normalized.includes('/src/lib/import-') ||
             normalized.includes('/src/lib/export-formats.ts') ||
-            normalized.includes('/src/components/VaultPage.tsx') ||
             normalized.includes('/src/components/SendsPage.tsx') ||
-            normalized.includes('/src/components/TotpCodesPage.tsx') ||
-            normalized.includes('/src/components/vault/')
+            normalized.includes('/src/components/TotpCodesPage.tsx')
           ) {
             return 'workspace-suite';
           }

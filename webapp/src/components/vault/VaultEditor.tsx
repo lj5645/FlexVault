@@ -1,4 +1,4 @@
-import type { RefObject } from 'preact';
+import type { JSX, RefObject } from 'preact';
 import { CheckCheck, Download, GripVertical, Paperclip, Plus, RefreshCw, Star, StarOff, Trash2, Upload, X } from 'lucide-preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import {
@@ -20,7 +20,15 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import type { Cipher, Folder, VaultDraft, VaultDraftField } from '@/lib/types';
 import { t } from '@/lib/i18n';
-import { CREATE_TYPE_OPTIONS, cipherTypeLabel, createEmptyLoginUri, formatAttachmentSize, toBooleanFieldValue, WEBSITE_MATCH_OPTIONS } from '@/components/vault/vault-page-helpers';
+import {
+  CREATE_TYPE_OPTIONS,
+  cipherTypeLabel,
+  createEmptyLoginUri,
+  formatAttachmentSize,
+  formatHistoryTime,
+  toBooleanFieldValue,
+  WEBSITE_MATCH_OPTIONS,
+} from '@/components/vault/vault-page-helpers';
 
 interface VaultEditorProps {
   draft: VaultDraft;
@@ -44,6 +52,7 @@ interface VaultEditorProps {
   onUpdateDraftLoginUri: (index: number, value: string) => void;
   onUpdateDraftLoginUriMatch: (index: number, value: number | null) => void;
   onReorderDraftLoginUri: (fromIndex: number, toIndex: number) => void;
+  onRequestDeleteLoginPasskey: (index: number) => void;
   onQueueAttachmentFiles: (list: FileList | null) => void;
   onToggleExistingAttachmentRemoval: (attachmentId: string) => void;
   onRemoveQueuedAttachment: (index: number) => void;
@@ -71,6 +80,7 @@ function SortableWebsiteRow(props: SortableWebsiteRowProps) {
   const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } = useSortable({
     id: props.id,
   });
+  const dragButtonAttributes = attributes as JSX.HTMLAttributes<HTMLButtonElement>;
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -89,7 +99,7 @@ function SortableWebsiteRow(props: SortableWebsiteRowProps) {
         className="btn btn-secondary small website-drag-btn"
         title={t('txt_drag_to_reorder')}
         aria-label={t('txt_drag_to_reorder')}
-        {...attributes}
+        {...dragButtonAttributes}
         {...listeners}
       >
         <GripVertical size={14} className="btn-icon" />
@@ -287,6 +297,42 @@ export default function VaultEditor(props: VaultEditorProps) {
               ))}
             </SortableContext>
           </DndContext>
+          {props.draft.loginFido2Credentials.length > 0 && (
+            <>
+              <div className="section-head passkeys-section-head">
+                <h4>{t('txt_passkeys')}</h4>
+              </div>
+              <div className="attachment-list">
+                {props.draft.loginFido2Credentials.map((credential, index) => {
+                  const createdAt = String(credential?.creationDate || '').trim();
+                  const label = createdAt
+                    ? t('txt_passkey_created_at_value', { value: formatHistoryTime(createdAt) })
+                    : t('txt_passkey');
+                  return (
+                    <div key={`login-passkey-${index}`} className="attachment-row">
+                      <div className="attachment-main">
+                        <div className="attachment-text">
+                          <strong>{t('txt_passkey')}</strong>
+                          <span>{label}</span>
+                        </div>
+                      </div>
+                      <div className="kv-actions">
+                        <button
+                          type="button"
+                          className="btn btn-secondary small"
+                          disabled={props.busy}
+                          onClick={() => props.onRequestDeleteLoginPasskey(index)}
+                        >
+                          <X size={14} className="btn-icon" />
+                          {t('txt_remove')}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </div>
       )}
 

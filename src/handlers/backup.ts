@@ -192,6 +192,7 @@ async function executeConfiguredBackup(
     });
     const archive = await buildBackupArchive(env, now, {
       includeAttachments: destination.includeAttachments,
+      timeZone: destination.schedule.timezone,
       progress: progress
         ? async (event) => {
           if (event.step === 'archive_ready') {
@@ -217,26 +218,28 @@ async function executeConfiguredBackup(
         : 'txt_backup_remote_run_progress_sync_attachments_skipped_detail',
     });
     const remoteSession = createRemoteBackupTransferSession(destination);
-    const remoteAttachmentIndex = await loadRemoteAttachmentIndex(remoteSession);
-    let attachmentIndexChanged = false;
-    for (const attachment of archive.manifest.attachmentBlobs || []) {
-      if (remoteAttachmentIndex.get(attachment.blobName) === attachment.sizeBytes) {
-        continue;
+    if (destination.includeAttachments) {
+      const remoteAttachmentIndex = await loadRemoteAttachmentIndex(remoteSession);
+      let attachmentIndexChanged = false;
+      for (const attachment of archive.manifest.attachmentBlobs || []) {
+        if (remoteAttachmentIndex.get(attachment.blobName) === attachment.sizeBytes) {
+          continue;
+        }
+        const remotePath = `attachments/${attachment.blobName}`;
+        const object = await getBlobObject(env, attachment.blobName);
+        if (!object) {
+          throw new Error(`Attachment blob missing for ${attachment.blobName}`);
+        }
+        const bytes = new Uint8Array(await new Response(object.body).arrayBuffer());
+        await remoteSession.putFile(remotePath, bytes, {
+          contentType: object.contentType,
+        });
+        remoteAttachmentIndex.set(attachment.blobName, attachment.sizeBytes);
+        attachmentIndexChanged = true;
       }
-      const remotePath = `attachments/${attachment.blobName}`;
-      const object = await getBlobObject(env, attachment.blobName);
-      if (!object) {
-        throw new Error(`Attachment blob missing for ${attachment.blobName}`);
+      if (attachmentIndexChanged) {
+        await saveRemoteAttachmentIndex(remoteSession, remoteAttachmentIndex);
       }
-      const bytes = new Uint8Array(await new Response(object.body).arrayBuffer());
-      await remoteSession.putFile(remotePath, bytes, {
-        contentType: object.contentType,
-      });
-      remoteAttachmentIndex.set(attachment.blobName, attachment.sizeBytes);
-      attachmentIndexChanged = true;
-    }
-    if (attachmentIndexChanged) {
-      await saveRemoteAttachmentIndex(remoteSession, remoteAttachmentIndex);
     }
     let upload: Awaited<ReturnType<typeof uploadBackupArchive>> | null = null;
     for (let attempt = 1; attempt <= maxArchiveUploadAttempts; attempt++) {

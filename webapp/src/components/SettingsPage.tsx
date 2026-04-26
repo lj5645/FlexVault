@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
-import { Clipboard, KeyRound, RefreshCw, ShieldCheck, ShieldOff } from 'lucide-preact';
+import { Clipboard, KeyRound, Lightbulb, RefreshCw, ShieldCheck, ShieldOff } from 'lucide-preact';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import qrcode from 'qrcode-generator';
 import type { Profile } from '@/lib/types';
@@ -9,17 +9,27 @@ import ConfirmDialog from '@/components/ConfirmDialog';
 interface SettingsPageProps {
   profile: Profile;
   totpEnabled: boolean;
+  lockTimeoutMinutes: 0 | 1 | 5 | 15 | 30;
+  sessionTimeoutAction: 'lock' | 'logout';
   onChangePassword: (currentPassword: string, nextPassword: string, nextPassword2: string) => Promise<void>;
   onSavePasswordHint: (masterPasswordHint: string) => Promise<void>;
   onEnableTotp: (secret: string, token: string) => Promise<void>;
   onOpenDisableTotp: () => void;
   onGetRecoveryCode: (masterPassword: string) => Promise<string>;
+  onGetApiKey: (masterPassword: string) => Promise<string>;
+  onRotateApiKey: (masterPassword: string) => Promise<string>;
+  onLockTimeoutChange: (minutes: 0 | 1 | 5 | 15 | 30) => void;
+  onSessionTimeoutActionChange: (action: 'lock' | 'logout') => void;
   onNotify?: (type: 'success' | 'error', text: string) => void;
-  passkeys: Array<{ id: string; name: string; creationDate: string; lastUsedDate: string | null }>;
-  onCreatePasskey: (name: string) => Promise<void>;
-  onRenamePasskey: (id: string, name: string) => Promise<void>;
-  onDeletePasskey: (id: string) => Promise<void>;
 }
+
+const LOCK_TIMEOUT_OPTIONS = [
+  { value: 1, labelKey: 'txt_timeout_1_minute' },
+  { value: 5, labelKey: 'txt_timeout_5_minutes' },
+  { value: 15, labelKey: 'txt_timeout_15_minutes' },
+  { value: 30, labelKey: 'txt_timeout_30_minutes' },
+  { value: 0, labelKey: 'txt_timeout_never' },
+] as const;
 
 function randomBase32Secret(length: number): string {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -41,21 +51,38 @@ function buildOtpUri(email: string, secret: string): string {
   return `otpauth://totp/${encodeURIComponent(`${issuer}:${email}`)}?secret=${encodeURIComponent(secret)}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
 }
 
+function clearLegacyTotpSetupSecrets(): void {
+  if (typeof window === 'undefined') return;
+  const prefix = 'nodewarden.totp.secret.';
+  const keys: string[] = [];
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    const key = window.localStorage.key(index);
+    if (key?.startsWith(prefix)) keys.push(key);
+  }
+  for (const key of keys) {
+    window.localStorage.removeItem(key);
+  }
+}
+
 export default function SettingsPage(props: SettingsPageProps) {
-  const totpSecretStorageKey = `nodewarden.totp.secret.${props.profile.id}`;
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newPassword2, setNewPassword2] = useState('');
   const [passwordHint, setPasswordHint] = useState(props.profile.masterPasswordHint || '');
-  const [secret, setSecret] = useState(() => localStorage.getItem(totpSecretStorageKey) || randomBase32Secret(32));
+  const [secret, setSecret] = useState(() => randomBase32Secret(32));
   const [token, setToken] = useState('');
   const [totpLocked, setTotpLocked] = useState(props.totpEnabled);
-  const [recoveryMasterPassword, setRecoveryMasterPassword] = useState('');
   const [recoveryCode, setRecoveryCode] = useState('');
-  const [passkeyName, setPasskeyName] = useState('');
-  const [renamePasskey, setRenamePasskey] = useState<{ id: string; name: string } | null>(null);
-  const [renamePasskeyName, setRenamePasskeyName] = useState('');
-  const [deletePasskey, setDeletePasskey] = useState<{ id: string; name: string } | null>(null);
+  const [apiKey, setApiKey] = useState('');
+  const [rotateApiKeyConfirmOpen, setRotateApiKeyConfirmOpen] = useState(false);
+  const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false);
+  const [masterPasswordPrompt, setMasterPasswordPrompt] = useState<null | 'recovery' | 'apiKey' | 'rotateApiKey'>(null);
+  const [masterPasswordPromptValue, setMasterPasswordPromptValue] = useState('');
+  const [masterPasswordPromptSubmitting, setMasterPasswordPromptSubmitting] = useState(false);
+
+  useEffect(() => {
+    clearLegacyTotpSetupSecrets();
+  }, []);
 
   useEffect(() => {
     if (!props.totpEnabled) {
@@ -81,19 +108,57 @@ export default function SettingsPage(props: SettingsPageProps) {
   async function enableTotp(): Promise<void> {
     try {
       await props.onEnableTotp(secret, token);
-      // Secret is now stored on the server; remove plaintext copy from localStorage.
-      localStorage.removeItem(totpSecretStorageKey);
       setTotpLocked(true);
     } catch {
       // Keep inputs editable after a failed attempt.
     }
   }
 
-  async function loadRecoveryCode(): Promise<void> {
-    const code = await props.onGetRecoveryCode(recoveryMasterPassword);
-    setRecoveryCode(code);
-    props.onNotify?.('success', t('txt_recovery_code_loaded'));
+  function openMasterPasswordPrompt(action: 'recovery' | 'apiKey' | 'rotateApiKey'): void {
+    setMasterPasswordPrompt(action);
+    setMasterPasswordPromptValue('');
   }
+
+  function closeMasterPasswordPrompt(): void {
+    if (masterPasswordPromptSubmitting) return;
+    setMasterPasswordPrompt(null);
+    setMasterPasswordPromptValue('');
+  }
+
+  async function submitMasterPasswordPrompt(): Promise<void> {
+    if (!masterPasswordPrompt || masterPasswordPromptSubmitting) return;
+    const masterPassword = masterPasswordPromptValue;
+    setMasterPasswordPromptSubmitting(true);
+    try {
+      if (masterPasswordPrompt === 'recovery') {
+        const code = await props.onGetRecoveryCode(masterPassword);
+        setRecoveryCode(code);
+        props.onNotify?.('success', t('txt_recovery_code_loaded'));
+      } else if (masterPasswordPrompt === 'apiKey') {
+        const key = await props.onGetApiKey(masterPassword);
+        setApiKey(key);
+        setApiKeyDialogOpen(true);
+      } else {
+        const key = await props.onRotateApiKey(masterPassword);
+        setApiKey(key);
+        setApiKeyDialogOpen(true);
+        props.onNotify?.('success', t('txt_api_key_rotated'));
+      }
+      setMasterPasswordPrompt(null);
+      setMasterPasswordPromptValue('');
+    } catch (error) {
+      props.onNotify?.('error', error instanceof Error ? error.message : t('txt_master_password_is_required_2'));
+    } finally {
+      setMasterPasswordPromptSubmitting(false);
+    }
+  }
+
+  const masterPasswordPromptTitle =
+    masterPasswordPrompt === 'recovery'
+      ? t('txt_view_recovery_code')
+      : masterPasswordPrompt === 'rotateApiKey'
+        ? t('txt_rotate_api_key')
+        : t('txt_view_api_key');
 
   function formatDateTime(value: string | null | undefined): string {
     if (!value) return t('txt_dash');
@@ -102,46 +167,45 @@ export default function SettingsPage(props: SettingsPageProps) {
     return parsed.toLocaleString();
   }
 
-  async function confirmRenamePasskey(): Promise<void> {
-    if (!renamePasskey) return;
-    const nextName = renamePasskeyName.trim();
-    if (!nextName) return;
-    await props.onRenamePasskey(renamePasskey.id, nextName);
-    setRenamePasskey(null);
-    setRenamePasskeyName('');
-  }
-
-  async function confirmDeletePasskey(): Promise<void> {
-    if (!deletePasskey) return;
-    await props.onDeletePasskey(deletePasskey.id);
-    setDeletePasskey(null);
-  }
-
   return (
-    <div className="stack">
-      <section className="card">
-        <h3>{t('txt_profile')}</h3>
-        <label className="field">
-          <span>{t('txt_password_hint_optional')}</span>
-          <input
-            className="input"
-            maxLength={120}
-            value={passwordHint}
-            placeholder={t('txt_password_hint_placeholder')}
-            onInput={(e) => setPasswordHint((e.currentTarget as HTMLInputElement).value)}
-          />
-          <div className="field-help">{t('txt_password_hint_register_help')}</div>
-        </label>
-        <button
-          type="button"
-          className="btn btn-secondary"
-          onClick={() => void props.onSavePasswordHint(passwordHint)}
-        >
-          {t('txt_save_profile')}
-        </button>
+    <div className="settings-modules-grid">
+      <section className="card settings-module">
+        <h3>{t('txt_session_timeout')}</h3>
+        <div className="session-timeout-fields">
+          <label className="field">
+            <span>{t('txt_timeout_time')}</span>
+            <select
+              className="input"
+              value={String(props.lockTimeoutMinutes)}
+              onInput={(e) => props.onLockTimeoutChange(Number((e.currentTarget as HTMLSelectElement).value) as 0 | 1 | 5 | 15 | 30)}
+            >
+              {LOCK_TIMEOUT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {t(option.labelKey)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>{t('txt_timeout_action')}</span>
+            <select
+              className="input"
+              value={props.sessionTimeoutAction}
+              onInput={(e) => props.onSessionTimeoutActionChange((e.currentTarget as HTMLSelectElement).value === 'logout' ? 'logout' : 'lock')}
+            >
+              <option value="logout">{t('txt_timeout_action_logout')}</option>
+              <option value="lock">{t('txt_timeout_action_lock')}</option>
+            </select>
+          </label>
+        </div>
       </section>
 
-      <section className="card">
+      <section className="card settings-module settings-module-placeholder">
+        <Lightbulb size={26} aria-hidden="true" />
+        <span>{t('txt_in_planning')}</span>
+      </section>
+
+      <section className="card settings-module">
         <h3>{t('txt_change_master_password')}</h3>
         <label className="field">
           <span>{t('txt_current_password')}</span>
@@ -172,156 +236,98 @@ export default function SettingsPage(props: SettingsPageProps) {
         </button>
       </section>
 
-      <section className="card">
-        <h3>Passkey</h3>
-        <div className="field-grid">
-          <label className="field">
-            <span>名称</span>
-            <input className="input" value={passkeyName} onInput={(e) => setPasskeyName((e.currentTarget as HTMLInputElement).value)} placeholder="例如：MacBook Touch ID" />
-          </label>
-          <div className="field" style={{ alignSelf: 'end' }}>
-            <button type="button" className="btn btn-primary" disabled={!passkeyName.trim()} onClick={() => void props.onCreatePasskey(passkeyName.trim()).then(() => setPasskeyName(''))}>
-              创建 Passkey
-            </button>
-          </div>
-        </div>
-        <p className="muted-inline" style={{ marginBottom: 8 }}>最多 5 个，支持重命名和删除。</p>
-        <div className="stack" style={{ gap: 6 }}>
-          {props.passkeys.map((item) => (
-            <div
-              key={item.id}
-              style={{
-                display: 'flex',
-                gap: 8,
-                alignItems: 'center',
-                border: '1px solid var(--line)',
-                borderRadius: 10,
-                padding: '10px 12px',
-                flexWrap: 'wrap',
-              }}
-            >
-              <strong>{item.name}</strong>
-              <span style={{ marginLeft: 'auto', fontSize: 12, opacity: 0.72 }}>
-                创建于 {formatDateTime(item.creationDate)}
-              </span>
-              <button
-                type="button"
-                className="btn btn-secondary small"
-                onClick={() => {
-                  setRenamePasskey({ id: item.id, name: item.name });
-                  setRenamePasskeyName(item.name);
-                }}
-              >
-                {t('txt_edit')}
-              </button>
-              <button
-                type="button"
-                className="btn btn-danger small"
-                onClick={() => setDeletePasskey({ id: item.id, name: item.name })}
-              >
-                删除
-              </button>
-            </div>
-          ))}
-          {!props.passkeys.length && <div className="empty">暂无 Passkey</div>}
-        </div>
+      <section className="card settings-module">
+        <h3>{t('txt_password_hint_optional')}</h3>
+        <label className="field">
+          <span>{t('txt_password_hint')}</span>
+          <input
+            className="input"
+            maxLength={120}
+            value={passwordHint}
+            placeholder={t('txt_password_hint_placeholder')}
+            onInput={(e) => setPasswordHint((e.currentTarget as HTMLInputElement).value)}
+          />
+          <div className="field-help">{t('txt_password_hint_register_help')}</div>
+        </label>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={() => void props.onSavePasswordHint(passwordHint)}
+        >
+          {t('txt_save_profile')}
+        </button>
       </section>
 
-      <ConfirmDialog
-        open={!!renamePasskey}
-        title={t('txt_edit')}
-        message={t('txt_enter_a_folder_name')}
-        confirmText={t('txt_save')}
-        cancelText={t('txt_cancel')}
-        onConfirm={() => void confirmRenamePasskey()}
-        onCancel={() => {
-          setRenamePasskey(null);
-          setRenamePasskeyName('');
-        }}
-      >
-        <label className="field">
-          <span>{t('txt_name')}</span>
-          <input className="input" value={renamePasskeyName} onInput={(e) => setRenamePasskeyName((e.currentTarget as HTMLInputElement).value)} />
-        </label>
-      </ConfirmDialog>
-
-      <ConfirmDialog
-        open={!!deletePasskey}
-        title={t('txt_delete')}
-        message={deletePasskey ? `确认删除 Passkey「${deletePasskey.name}」吗？` : ''}
-        variant="warning"
-        danger
-        confirmText={t('txt_delete')}
-        cancelText={t('txt_cancel')}
-        onConfirm={() => void confirmDeletePasskey()}
-        onCancel={() => setDeletePasskey(null)}
-      />
-
-      <section className="card">
-        <div className="settings-twofactor-grid">
-          <div className="settings-subcard">
-            <h3>{t('txt_totp')}</h3>
-            {totpLocked && <div className="status-ok">{t('txt_totp_is_enabled_for_this_account')}</div>}
-            <div className="totp-grid">
-              <div className="totp-qr">
-                <img src={qrDataUrl} alt="TOTP QR" />
-              </div>
-              <div>
-                <div>
-                  <label className="field">
-                    <span>{t('txt_authenticator_key')}</span>
-                    <input className="input" value={secret} disabled={totpLocked} onInput={(e) => setSecret((e.currentTarget as HTMLInputElement).value.toUpperCase())} />
-                  </label>
-                  <label className="field">
-                    <span>{t('txt_verification_code')}</span>
-                    <input className="input" value={token} disabled={totpLocked} onInput={(e) => setToken((e.currentTarget as HTMLInputElement).value)} />
-                  </label>
-                  <div className="actions">
-                    <button type="button" className="btn btn-primary" disabled={totpLocked} onClick={() => void enableTotp()}>
-                      <ShieldCheck size={14} className="btn-icon" />
-                      {totpLocked ? t('txt_enabled') : t('txt_enable_totp')}
-                    </button>
-                    <button type="button" className="btn btn-secondary" disabled={totpLocked} onClick={() => setSecret(randomBase32Secret(32))}>
+      <section className="card settings-module">
+        <h3>{t('txt_totp')}</h3>
+        {totpLocked && <div className="status-ok">{t('txt_totp_is_enabled_for_this_account')}</div>}
+        <div className="totp-grid">
+          <div className="totp-qr">
+            <img src={qrDataUrl} alt="TOTP QR" />
+          </div>
+          <div>
+            <div>
+              <label className="field">
+                <span>{t('txt_authenticator_key')}</span>
+                <div className="totp-secret-input-wrap">
+                  <input className="input totp-secret-input" value={secret} disabled={totpLocked} onInput={(e) => setSecret((e.currentTarget as HTMLInputElement).value.toUpperCase())} />
+                  <div className="totp-secret-actions">
+                    <button
+                      type="button"
+                      className="btn btn-secondary small totp-secret-icon-btn"
+                      disabled={totpLocked}
+                      title={t('txt_regenerate')}
+                      aria-label={t('txt_regenerate')}
+                      onClick={() => setSecret(randomBase32Secret(32))}
+                    >
                       <RefreshCw size={14} className="btn-icon" />
-                      {t('txt_regenerate')}
                     </button>
                     <button
                       type="button"
-                      className="btn btn-secondary"
+                      className="btn btn-secondary small totp-secret-icon-btn"
                       disabled={totpLocked}
+                      title={t('txt_copy_secret')}
+                      aria-label={t('txt_copy_secret')}
                       onClick={() => {
                         void copyTextToClipboard(secret, { successMessage: t('txt_secret_copied') });
                       }}
                     >
                       <Clipboard size={14} className="btn-icon" />
-                      {t('txt_copy_secret')}
                     </button>
                   </div>
                 </div>
+              </label>
+              <label className="field">
+                <span>{t('txt_verification_code')}</span>
+                <input className="input" value={token} disabled={totpLocked} onInput={(e) => setToken((e.currentTarget as HTMLInputElement).value)} />
+              </label>
+              <div className="actions">
+                <button type="button" className="btn btn-primary" disabled={totpLocked} onClick={() => void enableTotp()}>
+                  <ShieldCheck size={14} className="btn-icon" />
+                  {totpLocked ? t('txt_enabled') : t('txt_enable_totp')}
+                </button>
+                <button type="button" className="btn btn-danger" disabled={!totpLocked} onClick={props.onOpenDisableTotp}>
+                  <ShieldOff size={14} className="btn-icon" />
+                  {t('txt_disable_totp')}
+                </button>
               </div>
             </div>
-            <button type="button" className="btn btn-danger" disabled={!totpLocked} onClick={props.onOpenDisableTotp}>
-              <ShieldOff size={14} className="btn-icon" />
-              {t('txt_disable_totp')}
-            </button>
           </div>
+        </div>
+      </section>
 
-          <div className="settings-subcard">
-            <h3>{t('txt_recovery_code')}</h3>
-            <p className="muted-inline" style={{ marginBottom: 8 }}>
-              {t('txt_this_is_a_one_time_code_after_it_is_used_a_new_code_is_generated_automatically')}
-            </p>
-            <label className="field">
-              <span>{t('txt_master_password')}</span>
-              <input
-                className="input"
-                type="password"
-                value={recoveryMasterPassword}
-                onInput={(e) => setRecoveryMasterPassword((e.currentTarget as HTMLInputElement).value)}
-              />
-            </label>
+      <section className="card settings-module">
+        <h3>{t('txt_recovery_code_and_api_key')}</h3>
+        <div className="sensitive-actions-grid">
+          <div className="sensitive-action">
+            <div>
+              <h4>{t('txt_recovery_code')}</h4>
+              <p className="muted-inline settings-field-note">
+                {t('txt_this_is_a_one_time_code_after_it_is_used_a_new_code_is_generated_automatically')}
+              </p>
+            </div>
             <div className="actions">
-              <button type="button" className="btn btn-secondary" onClick={() => void loadRecoveryCode()}>
+              <button type="button" className="btn btn-secondary" onClick={() => openMasterPasswordPrompt('recovery')}>
                 <ShieldCheck size={14} className="btn-icon" />
                 {t('txt_view_recovery_code')}
               </button>
@@ -338,13 +344,109 @@ export default function SettingsPage(props: SettingsPageProps) {
               </button>
             </div>
             {recoveryCode && (
-              <div className="card" style={{ marginTop: 10, marginBottom: 0 }}>
-                <div style={{ fontWeight: 800, letterSpacing: '0.08em' }}>{recoveryCode}</div>
+              <div className="recovery-code-card">
+                <div className="recovery-code-value">{recoveryCode}</div>
               </div>
             )}
           </div>
+
+          <div className="sensitive-action">
+            <div>
+              <h4>{t('txt_api_key')}</h4>
+              <p className="muted-inline settings-field-note">{t('txt_api_key_dialog_intro')}</p>
+            </div>
+            <div className="actions">
+              <button type="button" className="btn btn-secondary" onClick={() => openMasterPasswordPrompt('apiKey')}>
+                <KeyRound size={14} className="btn-icon" />
+                {t('txt_view_api_key')}
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setRotateApiKeyConfirmOpen(true)}
+              >
+                <RefreshCw size={14} className="btn-icon" />
+                {t('txt_rotate_api_key')}
+              </button>
+            </div>
+          </div>
         </div>
       </section>
+      <ConfirmDialog
+        open={masterPasswordPrompt !== null}
+        title={masterPasswordPromptTitle}
+        message={t('txt_enter_master_password_to_continue')}
+        confirmText={t('txt_continue')}
+        cancelText={t('txt_cancel')}
+        confirmDisabled={masterPasswordPromptSubmitting || !masterPasswordPromptValue.trim()}
+        cancelDisabled={masterPasswordPromptSubmitting}
+        onConfirm={() => void submitMasterPasswordPrompt()}
+        onCancel={closeMasterPasswordPrompt}
+      >
+        <label className="field">
+          <span>{t('txt_master_password')}</span>
+          <input
+            className="input"
+            type="password"
+            autoComplete="current-password"
+            value={masterPasswordPromptValue}
+            onInput={(e) => setMasterPasswordPromptValue((e.currentTarget as HTMLInputElement).value)}
+          />
+        </label>
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={apiKeyDialogOpen}
+        title={t('txt_api_key')}
+        message={t('txt_api_key_dialog_intro')}
+        hideCancel
+        confirmText={t('txt_close')}
+        onConfirm={() => setApiKeyDialogOpen(false)}
+        onCancel={() => setApiKeyDialogOpen(false)}
+      >
+        <div className="api-key-warning-panel">
+          <div className="api-key-warning-title">{t('txt_warning')}</div>
+          <div className="api-key-warning-body">{t('txt_api_key_warning_body')}</div>
+        </div>
+
+        <div className="api-key-credentials-panel">
+          <div className="api-key-credentials-title">
+            <KeyRound size={15} />
+            <span>{t('txt_oauth_client_credentials')}</span>
+          </div>
+          {([
+            [t('txt_client_id'), `user.${props.profile.id}`],
+            [t('txt_client_secret'), apiKey],
+            [t('txt_scope'), 'api'],
+            [t('txt_grant_type'), 'client_credentials'],
+          ] as [string, string][]).map(([label, value]) => (
+            <label key={label} className="field">
+              <span>{label}</span>
+              <div className="api-key-credential-row">
+                <input className="input" readOnly value={value} onFocus={(e) => (e.currentTarget as HTMLInputElement).select()} />
+                <button
+                  type="button"
+                  className="btn btn-secondary small"
+                  onClick={() => void copyTextToClipboard(value, { successMessage: t('txt_copied') })}
+                >
+                  <Clipboard size={14} className="btn-icon" />
+                  {t('txt_copy')}
+                </button>
+              </div>
+            </label>
+          ))}
+        </div>
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={rotateApiKeyConfirmOpen}
+        title={t('txt_rotate_api_key')}
+        message={t('txt_rotate_api_key_confirm')}
+        danger
+        onConfirm={() => {
+          setRotateApiKeyConfirmOpen(false);
+          openMasterPasswordPrompt('rotateApiKey');
+        }}
+        onCancel={() => setRotateApiKeyConfirmOpen(false)}
+      />
     </div>
   );
 }

@@ -1,5 +1,7 @@
-import { useState } from 'preact/hooks';
-import { Archive, Clipboard, Download, Eye, EyeOff, ExternalLink, Paperclip, Pencil, RotateCcw, Trash2 } from 'lucide-preact';
+import { createPortal } from 'preact/compat';
+import { useMemo, useState } from 'preact/hooks';
+import { Archive, Clipboard, Download, Eye, EyeOff, ExternalLink, Paperclip, Pencil, RotateCcw, Trash2, X } from 'lucide-preact';
+import { useDialogLifecycle } from '@/components/ConfirmDialog';
 import type { Cipher } from '@/lib/types';
 import { t } from '@/lib/i18n';
 import {
@@ -35,10 +37,60 @@ interface VaultDetailViewProps {
   onUnarchive: (cipher: Cipher) => void | Promise<void>;
 }
 
+function PasswordHistoryDialog(props: {
+  open: boolean;
+  entries: Array<{ password: string; lastUsedDate: string | null }>;
+  onClose: () => void;
+}) {
+  useDialogLifecycle(props.open, props.onClose);
+
+  if (!props.open || typeof document === 'undefined') return null;
+  return createPortal(
+    <div className="dialog-mask open" onClick={(event) => event.target === event.currentTarget && props.onClose()}>
+      <section className="dialog-card password-history-dialog open" role="dialog" aria-modal="true" aria-label={t('txt_password_history')}>
+        <div className="password-history-head">
+          <h3 className="dialog-title">{t('txt_password_history')}</h3>
+          <button type="button" className="password-history-close" aria-label={t('txt_close')} onClick={props.onClose}>
+            <X size={18} />
+          </button>
+        </div>
+        <div className="password-history-list">
+          {props.entries.map((entry, index) => (
+            <div key={`password-history-${index}-${entry.lastUsedDate || 'none'}`} className="password-history-item">
+              <div className="password-history-copy">
+                <button type="button" className="btn btn-secondary small password-history-copy-btn" onClick={() => copyToClipboard(entry.password)}>
+                  <Clipboard size={16} />
+                </button>
+              </div>
+              <div className="password-history-value">{entry.password}</div>
+              <div className="password-history-time">{formatHistoryTime(entry.lastUsedDate)}</div>
+            </div>
+          ))}
+        </div>
+        <button type="button" className="btn btn-primary dialog-btn" onClick={props.onClose}>
+          {t('txt_close')}
+        </button>
+      </section>
+    </div>,
+    document.body
+  );
+}
+
 export default function VaultDetailView(props: VaultDetailViewProps) {
   const selectedAttachments = Array.isArray(props.selectedCipher.attachments) ? props.selectedCipher.attachments : [];
   const [showSshPrivateKey, setShowSshPrivateKey] = useState(false);
+  const [passwordHistoryOpen, setPasswordHistoryOpen] = useState(false);
   const isArchived = !!(props.selectedCipher.archivedDate || (props.selectedCipher as { archivedAt?: string | null }).archivedAt);
+  const passwordHistoryEntries = useMemo(
+    () =>
+      (props.selectedCipher.passwordHistory || [])
+        .map((entry) => ({
+          password: String(entry?.decPassword || entry?.password || ''),
+          lastUsedDate: entry?.lastUsedDate ?? null,
+        }))
+        .filter((entry) => entry.password.trim()),
+    [props.selectedCipher.passwordHistory]
+  );
   const formatDownloadLabel = (attachmentId: string) => {
     const downloadKey = `${props.selectedCipher.id}:${attachmentId}`;
     if (props.downloadingAttachmentKey !== downloadKey) return t('txt_download');
@@ -53,7 +105,7 @@ export default function VaultDetailView(props: VaultDetailViewProps) {
         <div className="card">
           <h4>{t('txt_master_password_reprompt_2')}</h4>
           <div className="detail-sub">{t('txt_this_item_requires_master_password_every_time_before_viewing_details')}</div>
-          <div className="actions" style={{ marginTop: '10px' }}>
+          <div className="actions detail-unlock-actions">
             <button type="button" className="btn btn-primary" onClick={props.onOpenReprompt}>
               <Eye size={14} className="btn-icon" /> {t('txt_unlock_details')}
             </button>
@@ -65,7 +117,7 @@ export default function VaultDetailView(props: VaultDetailViewProps) {
           <div className="card">
             <h3 className="detail-title">{props.selectedCipher.decName || t('txt_no_name')}</h3>
             <div className="detail-sub">{props.folderName(props.selectedCipher.folderId)}</div>
-            {isArchived && <div className="list-badge" style={{ marginTop: '8px', width: 'fit-content' }}>{t('txt_archived')}</div>}
+            {isArchived && <div className="list-badge archive-badge">{t('txt_archived')}</div>}
           </div>
 
           {props.selectedCipher.login && (
@@ -355,6 +407,14 @@ export default function VaultDetailView(props: VaultDetailViewProps) {
               <h4>{t('txt_item_history')}</h4>
               <div className="detail-sub">{t('txt_last_edited_value', { value: formatHistoryTime(props.selectedCipher.revisionDate) })}</div>
               <div className="detail-sub">{t('txt_created_value', { value: formatHistoryTime(props.selectedCipher.creationDate) })}</div>
+              {!!props.selectedCipher.login?.passwordRevisionDate && (
+                <div className="detail-sub">{t('txt_password_updated_value', { value: formatHistoryTime(props.selectedCipher.login.passwordRevisionDate) })}</div>
+              )}
+              {passwordHistoryEntries.length > 0 && (
+                <button type="button" className="password-history-link" onClick={() => setPasswordHistoryOpen(true)}>
+                  {t('txt_password_history')}
+                </button>
+              )}
             </div>
           )}
 
@@ -379,6 +439,11 @@ export default function VaultDetailView(props: VaultDetailViewProps) {
           </div>
         </>
       )}
+      <PasswordHistoryDialog
+        open={passwordHistoryOpen}
+        entries={passwordHistoryEntries}
+        onClose={() => setPasswordHistoryOpen(false)}
+      />
     </>
   );
 }

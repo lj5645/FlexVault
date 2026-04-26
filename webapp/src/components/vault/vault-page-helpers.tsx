@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import {
   CreditCard,
   FileKey2,
@@ -12,7 +12,7 @@ import { t } from '@/lib/i18n';
 import type { Cipher, CipherAttachment, CustomFieldType, VaultDraft, VaultDraftField, VaultDraftLoginUri } from '@/lib/types';
 
 export type TypeFilter = 'login' | 'card' | 'identity' | 'note' | 'ssh';
-export type VaultSortMode = 'edited' | 'created' | 'name';
+export type VaultSortMode = 'manual' | 'edited' | 'created' | 'name';
 export type SidebarFilter =
   | { kind: 'all' }
   | { kind: 'favorite' }
@@ -36,10 +36,18 @@ export const CREATE_TYPE_OPTIONS: TypeOption[] = [
 ];
 
 export const VAULT_SORT_STORAGE_KEY = 'nodewarden.vault.sort.v1';
-export const MOBILE_LAYOUT_QUERY = '(max-width: 900px)';
-export const VAULT_LIST_ROW_HEIGHT = 66;
+export const VAULT_ORDER_STORAGE_KEY = 'nodewarden.vault-order.v1';
+export const FOLDER_SORT_STORAGE_KEY = 'nodewarden.folder-sort.v1';
+export const MOBILE_LAYOUT_QUERY = '(max-width: 1180px)';
+export const VAULT_LIST_ROW_HEIGHT = 74;
 export const VAULT_LIST_OVERSCAN = 10;
 export const VAULT_SORT_OPTIONS: Array<{ value: VaultSortMode; label: string }> = [
+  { value: 'manual', label: t('txt_sort_manual') },
+  { value: 'edited', label: t('txt_sort_last_edited') },
+  { value: 'created', label: t('txt_sort_created') },
+  { value: 'name', label: t('txt_sort_name') },
+];
+export const FOLDER_SORT_OPTIONS: Array<{ value: Exclude<VaultSortMode, 'manual'>; label: string }> = [
   { value: 'edited', label: t('txt_sort_last_edited') },
   { value: 'created', label: t('txt_sort_created') },
   { value: 'name', label: t('txt_sort_name') },
@@ -161,11 +169,11 @@ export function hostFromUri(uri: string): string {
 }
 
 export function websiteIconUrl(host: string): string {
-  return `/icons/${encodeURIComponent(host)}/icon.png`;
+  return `/icons/${encodeURIComponent(host)}/icon.png?fallback=404`;
 }
 
 export function createEmptyLoginUri(): VaultDraftLoginUri {
-  return { uri: '', match: null };
+  return { uri: '', match: null, originalUri: '', extra: {} };
 }
 
 export function websiteMatchLabel(value: number | null | undefined): string {
@@ -313,6 +321,10 @@ export function draftFromCipher(cipher: Cipher): VaultDraft {
     draft.loginUris = (cipher.login.uris || []).map((x) => ({
       uri: x.decUri || x.uri || '',
       match: x.match ?? null,
+      originalUri: x.decUri || x.uri || '',
+      extra: Object.fromEntries(
+        Object.entries(x as Record<string, unknown>).filter(([key]) => !['uri', 'match', 'decUri'].includes(key))
+      ),
     }));
     draft.loginFido2Credentials = Array.isArray(cipher.login.fido2Credentials)
       ? cipher.login.fido2Credentials.map((credential) => ({ ...credential }))
@@ -429,19 +441,41 @@ export function VaultListIcon({ cipher }: { cipher: Cipher }) {
   const uri = firstCipherUri(cipher);
   const host = hostFromUri(uri);
   const [errored, setErrored] = useState(() => (host ? failedIconHosts.has(host) : false));
+  const [loaded, setLoaded] = useState(false);
+  const markIconError = () => {
+    if (host) failedIconHosts.add(host);
+    setErrored(true);
+  };
+  const syncCachedIconState = (img: HTMLImageElement | null) => {
+    if (!img || !img.complete) return;
+    if (img.naturalWidth > 0) {
+      setLoaded(true);
+      return;
+    }
+    markIconError();
+  };
+  useEffect(() => {
+    setErrored(host ? failedIconHosts.has(host) : false);
+    setLoaded(false);
+  }, [host]);
+
   if (host && !errored) {
     return (
-      <img
-        className="list-icon"
-        src={websiteIconUrl(host)}
-        alt=""
-        loading="lazy"
-        referrerPolicy="no-referrer"
-        onError={() => {
-          failedIconHosts.add(host);
-          setErrored(true);
-        }}
-      />
+      <span className="list-icon-stack">
+        <span className={`list-icon-fallback ${loaded ? 'hidden' : ''}`}>
+          <Globe size={18} />
+        </span>
+        <img
+          className={`list-icon ${loaded ? 'loaded' : ''}`}
+          src={websiteIconUrl(host)}
+          alt=""
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          ref={syncCachedIconState}
+          onLoad={() => setLoaded(true)}
+          onError={markIconError}
+        />
+      </span>
     );
   }
   return (

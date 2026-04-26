@@ -1,0 +1,145 @@
+.loading-screen {
+  @apply grid h-full place-items-center text-lg text-muted;
+}
+
+.auth-page {
+  @apply relative grid min-h-full place-items-center bg-transparent p-6;
+}
+
+.public-send-page {
+  @apply min-h-[80vh] items-center;
+  justify-items: center;
+}
+
+.public-send-title {
+  @apply mt-2;
+}
+
+.public-send-card {
+  @apply mt-2.5;
+}
+
+.inline-status-icon {
+  @apply align-text-bottom;
+}
+
+.auth-card {
+  @apply relative w-full overflow-hidden border bg-panel p-[30px] shadow-elevated;
+  border-color: var(--line);
+  @apply rounded-[22px];
+}
+
+.auth-card h1 {
+  @apply m-0 mb-1 text-center;
+}
+
+.standalone-shell {
+  @apply grid w-[min(640px,100%)] gap-3.5;
+}
+
+.standalone-brand {
+  @apply mb-3 inline-flex items-center gap-3.5;
+}
+
+.standalone-brand-outside {
+  @apply mb-0.5 w-full justify-center;
+}
+
+.standalone-brand-logo {
+  @apply h-14 w-[70px] flex-shrink-0 object-contain;
+  filter: drop-shadow(0 8px 18px rgba(43, 102, 217, 0.22));
+}
+
+.standalone-brand-wordmark {
+  @apply block max-w-full;
+  width: clamp(200px, 30vw, 340px);
+  aspect-ratio: 862 / 102;
+  background: #116ff9;
+  mask: url('/nodewarden-wordmark.svg') center / contain no-repeat;
+  -webkit-mask: url('/nodewarden-wordmark.svg') center / contain no-repeat;
+}
+
+.standalone-title {
+  @apply m-0 mb-1 text-left text-3xl font-bold leading-tight tracking-normal;
+}
+
+.standalone-muted {
+  @apply text-left;
+}
+
+.jwt-warning-head {
+  @apply mb-2.5 flex items-center justify-center gap-2.5 text-center;
+  color: #b45309;
+}
+
+.jwt-warning-box {
+  @apply rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3;
+}
+
+.jwt-warning-label {
+  @apply mb-1.5 text-[13px] font-bold;
+  color: #92400e;
+}
+
+.jwt-warning-copy {
+  @apply m-0 mb-3.5 leading-[1.6];
+  color: #475569;
+}
+
+.jwt-warning-list {
+  @apply m-0 pl-[18px] leading-[1.55];
+  color: #334155;
+}
+
+.jwt-inline-link {
+  @apply font-bold no-underline;
+  color: #1d4ed8;
+}
+
+.jwt-inline-link:hover {
+  text-decoration: underline;
+}
+
+.jwt-secret-fields {
+  @apply mt-2 grid gap-1.5;
+}
+
+.jwt-secret-row {
+  @apply grid items-start gap-2;
+  grid-template-columns: 88px minmax(0, 1fr);
+}
+
+.jwt-secret-row > span {
+  color: #64748b;
+}
+
+.jwt-generator {
+  @apply mt-3.5;
+}
+
+.jwt-generator-actions {
+  @apply mt-2.5 flex flex-wrap items-center gap-2.5;
+}
+
+.jwt-copy-hint {
+  @apply text-[13px] font-bold;
+  color: #15803d;
+}
+
+.standalone-footer {
+  @apply w-full text-center text-[13px] text-slate-500;
+}
+
+.standalone-footer a {
+  @apply font-bold no-underline;
+  color: #1d4ed8;
+}
+
+.standalone-footer a:hover {
+  text-decoration: underline;
+}
+
+.standalone-version {
+  @apply font-bold;
+  color: #1d4ed8;
+}

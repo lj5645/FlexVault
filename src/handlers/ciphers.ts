@@ -1,4 +1,15 @@
-import { Env, Cipher, CipherResponse, Attachment } from '../types';
+import {
+  Env,
+  Cipher,
+  CipherCard,
+  CipherIdentity,
+  CipherLogin,
+  CipherResponse,
+  CipherSecureNote,
+  CipherSshKey,
+  Attachment,
+  PasswordHistory,
+} from '../types';
 import { StorageService } from '../services/storage';
 import { notifyUserVaultSync } from '../durable/notifications';
 import { jsonResponse, errorResponse } from '../utils/response';
@@ -32,6 +43,10 @@ function getAliasedProp(source: any, aliases: string[]): { present: boolean; val
   return { present: false, value: undefined };
 }
 
+function readCipherProp<T = unknown>(source: any, aliases: string[]): { present: boolean; value: T | undefined } {
+  return getAliasedProp(source, aliases) as { present: boolean; value: T | undefined };
+}
+
 function normalizeCipherTimestamp(value: unknown): string | null {
   if (value == null || value === '') return null;
   const parsed = new Date(String(value));
@@ -42,6 +57,19 @@ function normalizeCipherTimestamp(value: unknown): string | null {
 function readCipherArchivedAt(source: any, fallback: string | null = null): string | null {
   const archived = getAliasedProp(source, ['archivedAt', 'ArchivedAt', 'archivedDate', 'ArchivedDate']);
   return archived.present ? normalizeCipherTimestamp(archived.value) : fallback;
+}
+
+function readCipherRevisionDate(source: any): string | null {
+  const revision = getAliasedProp(source, ['lastKnownRevisionDate', 'LastKnownRevisionDate']);
+  return revision.present ? normalizeCipherTimestamp(revision.value) : null;
+}
+
+function isStaleCipherUpdate(existingUpdatedAt: string, clientRevisionDate: string | null): boolean {
+  if (!clientRevisionDate) return false;
+  const existingTs = Date.parse(existingUpdatedAt);
+  const clientTs = Date.parse(clientRevisionDate);
+  if (Number.isNaN(existingTs) || Number.isNaN(clientTs)) return false;
+  return existingTs - clientTs > 1000;
 }
 
 function syncCipherComputedAliases(cipher: Cipher): Cipher {
@@ -61,80 +89,18 @@ function normalizeCipherForStorage(cipher: Cipher): Cipher {
   return syncCipherComputedAliases(cipher);
 }
 
-function looksLikeCipherString(value: unknown): boolean {
-  return /^\d+\.[A-Za-z0-9+/=]+\|[A-Za-z0-9+/=]+(?:\|[A-Za-z0-9+/=]+)?$/.test(String(value || '').trim());
-}
-
-export function shouldOmitPasskeysForResponse(request: Request | null | undefined): boolean {
-  const userAgent = String(request?.headers.get('user-agent') || '').toLowerCase();
-  if (!userAgent) return false;
-
-  // Temporary compatibility fallback:
-  // mobile clients expect official EncString payloads for most FIDO2 fields.
-  // Keep passkeys available everywhere, but suppress only legacy malformed data
-  // for mobile clients so newly-saved credentials can flow through unchanged.
-  return (
-    userAgent.includes('android') ||
-    userAgent.includes('iphone') ||
-    userAgent.includes('ipad') ||
-    userAgent.includes('ios')
-  );
-}
-
 export function normalizeCipherLoginForStorage(login: any): any {
   if (!login || typeof login !== 'object') return login ?? null;
-
   return {
     ...login,
     fido2Credentials: Array.isArray(login.fido2Credentials) ? login.fido2Credentials : null,
   };
 }
 
-export function normalizeCipherLoginForCompatibility(
-  login: any,
-  options?: { omitFido2Credentials?: boolean }
-): any {
+export function normalizeCipherLoginForCompatibility(login: any): any {
   const normalized = normalizeCipherLoginForStorage(login);
   if (!normalized || typeof normalized !== 'object') return normalized ?? null;
-  if (!options?.omitFido2Credentials) return normalized;
-
-  const credentials = Array.isArray(normalized.fido2Credentials) ? normalized.fido2Credentials : null;
-  if (!credentials?.length) return normalized;
-
-  const hasMalformedCredential = credentials.some((credential: any) => {
-    if (!credential || typeof credential !== 'object') return true;
-    const requiredEncryptedFields = [
-      credential.credentialId,
-      credential.keyType,
-      credential.keyAlgorithm,
-      credential.keyCurve,
-      credential.keyValue,
-      credential.rpId,
-      credential.counter,
-      credential.discoverable,
-    ];
-    const optionalEncryptedFields = [
-      credential.userHandle,
-      credential.userName,
-      credential.rpName,
-      credential.userDisplayName,
-    ];
-
-    if (requiredEncryptedFields.some((value) => !looksLikeCipherString(value))) {
-      return true;
-    }
-    if (optionalEncryptedFields.some((value) => value != null && !looksLikeCipherString(value))) {
-      return true;
-    }
-    return false;
-  });
-
-  return hasMalformedCredential
-    ? {
-        ...normalized,
-        fido2Credentials: null,
-      }
-    : normalized;
+  return normalized;
 }
 
 // Android 2026.2.0 requires sshKey.keyFingerprint in sync payloads.
@@ -180,12 +146,11 @@ export function formatAttachments(attachments: Attachment[]): any[] | null {
 // survive a round-trip without code changes.
 export function cipherToResponse(
   cipher: Cipher,
-  attachments: Attachment[] = [],
-  options?: { omitFido2Credentials?: boolean }
+  attachments: Attachment[] = []
 ): CipherResponse {
   // Strip internal-only fields that must not appear in the API response
   const { userId, createdAt, updatedAt, archivedAt, deletedAt, ...passthrough } = cipher;
-  const normalizedLogin = normalizeCipherLoginForCompatibility((passthrough as any).login ?? null, options);
+  const normalizedLogin = normalizeCipherLoginForCompatibility((passthrough as any).login ?? null);
   const normalizedSshKey = normalizeCipherSshKeyForCompatibility((passthrough as any).sshKey ?? null);
 
   return {
@@ -194,8 +159,8 @@ export function cipherToResponse(
     // Server-computed / enforced fields (always override)
     folderId: normalizeOptionalId(cipher.folderId),
     type: Number(cipher.type) || 1,
-    organizationId: null,
-    organizationUseTotp: false,
+    organizationId: normalizeOptionalId((passthrough as any).organizationId ?? null),
+    organizationUseTotp: !!((passthrough as any).organizationUseTotp ?? false),
     creationDate: createdAt,
     revisionDate: updatedAt,
     deletedDate: deletedAt,
@@ -206,12 +171,12 @@ export function cipherToResponse(
       delete: true,
       restore: true,
     },
-    object: 'cipher',
-    collectionIds: [],
+    object: 'cipherDetails',
+    collectionIds: Array.isArray((passthrough as any).collectionIds) ? (passthrough as any).collectionIds : [],
     attachments: formatAttachments(attachments),
     login: normalizedLogin,
     sshKey: normalizedSshKey,
-    encryptedFor: null,
+    encryptedFor: (passthrough as any).encryptedFor ?? null,
   };
 }
 
@@ -221,7 +186,6 @@ export async function handleGetCiphers(request: Request, env: Env, userId: strin
   const url = new URL(request.url);
   const includeDeleted = url.searchParams.get('deleted') === 'true';
   const pagination = parsePagination(url);
-  const omitFido2Credentials = shouldOmitPasskeysForResponse(request);
 
   let filteredCiphers: Cipher[];
   let continuationToken: string | null = null;
@@ -242,13 +206,15 @@ export async function handleGetCiphers(request: Request, env: Env, userId: strin
       : ciphers.filter(c => !c.deletedAt);
   }
 
-  const attachmentsByCipher = await storage.getAttachmentsByUserId(userId);
+  const attachmentsByCipher = await storage.getAttachmentsByCipherIds(
+    filteredCiphers.map((cipher) => cipher.id)
+  );
 
-  // Get attachments for all ciphers
-  const cipherResponses = [];
+  // Build responses only for the current page to keep pagination cheap.
+  const cipherResponses: CipherResponse[] = [];
   for (const cipher of filteredCiphers) {
     const attachments = attachmentsByCipher.get(cipher.id) || [];
-    cipherResponses.push(cipherToResponse(cipher, attachments, { omitFido2Credentials }));
+    cipherResponses.push(cipherToResponse(cipher, attachments));
   }
 
   return jsonResponse({
@@ -269,9 +235,7 @@ export async function handleGetCipher(request: Request, env: Env, userId: string
 
   const attachments = await storage.getAttachmentsByCipher(cipher.id);
   return jsonResponse(
-    cipherToResponse(cipher, attachments, {
-      omitFido2Credentials: shouldOmitPasskeysForResponse(request),
-    })
+    cipherToResponse(cipher, attachments)
   );
 }
 
@@ -295,6 +259,14 @@ export async function handleCreateCipher(request: Request, env: Env, userId: str
   // Handle nested cipher object (from some clients)
   // Android client sends PascalCase "Cipher" for organization ciphers
   const cipherData = body.Cipher || body.cipher || body;
+  const createFolderId = readCipherProp<string | null>(cipherData, ['folderId', 'FolderId']);
+  const createKey = readCipherProp<string | null>(cipherData, ['key', 'Key']);
+  const createLogin = readCipherProp<CipherLogin | null>(cipherData, ['login', 'Login']);
+  const createCard = readCipherProp<CipherCard | null>(cipherData, ['card', 'Card']);
+  const createIdentity = readCipherProp<CipherIdentity | null>(cipherData, ['identity', 'Identity']);
+  const createSecureNote = readCipherProp<CipherSecureNote | null>(cipherData, ['secureNote', 'SecureNote']);
+  const createSshKey = readCipherProp<CipherSshKey | null>(cipherData, ['sshKey', 'SshKey']);
+  const createPasswordHistory = readCipherProp<PasswordHistory[] | null>(cipherData, ['passwordHistory', 'PasswordHistory']);
 
   const now = new Date().toISOString();
   // Opaque passthrough: spread ALL client fields to preserve unknown/future ones,
@@ -312,6 +284,14 @@ export async function handleCreateCipher(request: Request, env: Env, userId: str
     archivedAt: readCipherArchivedAt(cipherData, null),
     deletedAt: null,
   };
+  cipher.folderId = createFolderId.present ? normalizeOptionalId(createFolderId.value) : normalizeOptionalId(cipher.folderId);
+  cipher.key = createKey.present ? (createKey.value ?? null) : (cipher.key ?? null);
+  cipher.login = createLogin.present ? (createLogin.value ?? null) : (cipher.login ?? null);
+  cipher.card = createCard.present ? (createCard.value ?? null) : (cipher.card ?? null);
+  cipher.identity = createIdentity.present ? (createIdentity.value ?? null) : (cipher.identity ?? null);
+  cipher.secureNote = createSecureNote.present ? (createSecureNote.value ?? null) : (cipher.secureNote ?? null);
+  cipher.sshKey = createSshKey.present ? (createSshKey.value ?? null) : (cipher.sshKey ?? null);
+  cipher.passwordHistory = createPasswordHistory.present ? (createPasswordHistory.value ?? null) : (cipher.passwordHistory ?? null);
   const createFields = getAliasedProp(cipherData, ['fields', 'Fields']);
   cipher.fields = createFields.present ? (createFields.value ?? null) : (cipher.fields ?? null);
   normalizeCipherForStorage(cipher);
@@ -327,9 +307,7 @@ export async function handleCreateCipher(request: Request, env: Env, userId: str
   await notifyVaultSyncForRequest(request, env, userId, revisionDate);
 
   return jsonResponse(
-    cipherToResponse(cipher, [], {
-      omitFido2Credentials: shouldOmitPasskeysForResponse(request),
-    }),
+    cipherToResponse(cipher, []),
     200
   );
 }
@@ -353,6 +331,21 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
   // Handle nested cipher object
   // Android client sends PascalCase "Cipher" for organization ciphers
   const cipherData = body.Cipher || body.cipher || body;
+  const incomingFolderId = readCipherProp<string | null>(cipherData, ['folderId', 'FolderId']);
+  const incomingKey = readCipherProp<string | null>(cipherData, ['key', 'Key']);
+  const incomingLogin = readCipherProp<CipherLogin | null>(cipherData, ['login', 'Login']);
+  const incomingCard = readCipherProp<CipherCard | null>(cipherData, ['card', 'Card']);
+  const incomingIdentity = readCipherProp<CipherIdentity | null>(cipherData, ['identity', 'Identity']);
+  const incomingSecureNote = readCipherProp<CipherSecureNote | null>(cipherData, ['secureNote', 'SecureNote']);
+  const incomingSshKey = readCipherProp<CipherSshKey | null>(cipherData, ['sshKey', 'SshKey']);
+  const incomingPasswordHistory = readCipherProp<PasswordHistory[] | null>(cipherData, ['passwordHistory', 'PasswordHistory']);
+  const incomingRevisionDate = readCipherRevisionDate(cipherData);
+
+  if (isStaleCipherUpdate(existingCipher.updatedAt, incomingRevisionDate)) {
+    return errorResponse('The client copy of this cipher is out of date. Resync the client and try again.', 400);
+  }
+
+  const nextType = Number(cipherData.type) || existingCipher.type;
 
   // Opaque passthrough: merge existing stored data with ALL incoming client fields.
   // Unknown/future fields from the client are preserved; server-controlled fields are protected.
@@ -362,7 +355,7 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
     // Server-controlled fields (never from client)
     id: existingCipher.id,
     userId: existingCipher.userId,
-    type: Number(cipherData.type) || existingCipher.type,
+    type: nextType,
     favorite: cipherData.favorite ?? existingCipher.favorite,
     reprompt: cipherData.reprompt ?? existingCipher.reprompt,
     createdAt: existingCipher.createdAt,
@@ -370,6 +363,20 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
     archivedAt: readCipherArchivedAt(cipherData, existingCipher.archivedAt ?? null),
     deletedAt: existingCipher.deletedAt,
   };
+  if (incomingFolderId.present) {
+    cipher.folderId = normalizeOptionalId(incomingFolderId.value);
+  }
+  if (incomingKey.present) {
+    cipher.key = incomingKey.value ?? null;
+  }
+  cipher.login = nextType === 1 ? (incomingLogin.present ? (incomingLogin.value ?? null) : (existingCipher.login ?? null)) : null;
+  cipher.secureNote = nextType === 2 ? (incomingSecureNote.present ? (incomingSecureNote.value ?? null) : (existingCipher.secureNote ?? null)) : null;
+  cipher.card = nextType === 3 ? (incomingCard.present ? (incomingCard.value ?? null) : (existingCipher.card ?? null)) : null;
+  cipher.identity = nextType === 4 ? (incomingIdentity.present ? (incomingIdentity.value ?? null) : (existingCipher.identity ?? null)) : null;
+  cipher.sshKey = nextType === 5 ? (incomingSshKey.present ? (incomingSshKey.value ?? null) : (existingCipher.sshKey ?? null)) : null;
+  if (incomingPasswordHistory.present) {
+    cipher.passwordHistory = incomingPasswordHistory.value ?? null;
+  }
 
   // Custom fields deletion compatibility:
   // - Accept both camelCase "fields" and PascalCase "Fields".
@@ -392,11 +399,10 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
   await storage.saveCipher(cipher);
   const revisionDate = await storage.updateRevisionDate(userId);
   await notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  const attachments = await storage.getAttachmentsByCipher(cipher.id);
 
   return jsonResponse(
-    cipherToResponse(cipher, [], {
-      omitFido2Credentials: shouldOmitPasskeysForResponse(request),
-    })
+    cipherToResponse(cipher, attachments)
   );
 }
 
@@ -418,9 +424,7 @@ export async function handleDeleteCipher(request: Request, env: Env, userId: str
   await notifyVaultSyncForRequest(request, env, userId, revisionDate);
 
   return jsonResponse(
-    cipherToResponse(cipher, [], {
-      omitFido2Credentials: shouldOmitPasskeysForResponse(request),
-    })
+    cipherToResponse(cipher, [])
   );
 }
 
@@ -484,9 +488,7 @@ export async function handleRestoreCipher(request: Request, env: Env, userId: st
   await notifyVaultSyncForRequest(request, env, userId, revisionDate);
 
   return jsonResponse(
-    cipherToResponse(cipher, [], {
-      omitFido2Credentials: shouldOmitPasskeysForResponse(request),
-    })
+    cipherToResponse(cipher, [])
   );
 }
 
@@ -525,9 +527,7 @@ export async function handlePartialUpdateCipher(request: Request, env: Env, user
   await notifyVaultSyncForRequest(request, env, userId, revisionDate);
 
   return jsonResponse(
-    cipherToResponse(cipher, [], {
-      omitFido2Credentials: shouldOmitPasskeysForResponse(request),
-    })
+    cipherToResponse(cipher, [])
   );
 }
 
@@ -568,13 +568,10 @@ async function buildCipherListResponse(
 ): Promise<Response> {
   const ciphers = await storage.getCiphersByIds(ids, userId);
   const attachmentsByCipher = await storage.getAttachmentsByCipherIds(ciphers.map((cipher) => cipher.id));
-  const omitFido2Credentials = shouldOmitPasskeysForResponse(request);
 
   return jsonResponse({
     data: ciphers.map((cipher) =>
-      cipherToResponse(cipher, attachmentsByCipher.get(cipher.id) || [], {
-        omitFido2Credentials,
-      })
+      cipherToResponse(cipher, attachmentsByCipher.get(cipher.id) || [])
     ),
     object: 'list',
     continuationToken: null,
@@ -607,9 +604,7 @@ export async function handleArchiveCipher(request: Request, env: Env, userId: st
 
   const attachments = await storage.getAttachmentsByCipher(cipher.id);
   return jsonResponse(
-    cipherToResponse(cipher, attachments, {
-      omitFido2Credentials: shouldOmitPasskeysForResponse(request),
-    })
+    cipherToResponse(cipher, attachments)
   );
 }
 
@@ -631,9 +626,7 @@ export async function handleUnarchiveCipher(request: Request, env: Env, userId: 
 
   const attachments = await storage.getAttachmentsByCipher(cipher.id);
   return jsonResponse(
-    cipherToResponse(cipher, attachments, {
-      omitFido2Credentials: shouldOmitPasskeysForResponse(request),
-    })
+    cipherToResponse(cipher, attachments)
   );
 }
 

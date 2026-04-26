@@ -13,6 +13,7 @@ import {
   handleRevokeTrustedDevice,
   handleDeleteAllDevices,
   handleDeleteDevice,
+  handleUpdateDeviceName,
   handleUpdateDeviceToken,
   handleUpdateDeviceWebPushAuth,
   handleClearDeviceToken,
@@ -51,6 +52,12 @@ export async function handleAuthenticatedDeviceRoute(
   if (deleteDeviceMatch && method === 'DELETE') {
     const deviceIdentifier = decodeURIComponent(deleteDeviceMatch[1]);
     return handleDeleteDevice(request, env, userId, deviceIdentifier);
+  }
+
+  const updateDeviceNameMatch = path.match(/^\/api\/devices\/([^/]+)\/name$/i);
+  if (updateDeviceNameMatch && method === 'PUT') {
+    const deviceIdentifier = decodeURIComponent(updateDeviceNameMatch[1]);
+    return handleUpdateDeviceName(request, env, userId, deviceIdentifier);
   }
 
   const identifierMatch = path.match(/^\/api\/devices\/identifier\/([^/]+)$/i);

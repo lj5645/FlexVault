@@ -10,24 +10,26 @@ import JwtWarningPage from '@/components/JwtWarningPage';
 import {
   createAuthedFetch,
   getAuthorizedDevices,
+  clearProfileSnapshot,
   getCurrentDeviceIdentifier,
   getPasswordHint,
-  listAccountPasskeys,
-  registerAccountPasskey,
-  renameAccountPasskey,
-  deleteAccountPasskey,
+  loadProfileSnapshot,
+  saveProfileSnapshot,
+  revokeCurrentSession,
   getTotpStatus,
   saveSession,
+  stripProfileSecrets,
 } from '@/lib/api/auth';
 import { listAdminInvites, listAdminUsers } from '@/lib/api/admin';
 import { buildSendShareKey, getSends } from '@/lib/api/send';
 import {
   getCiphers,
   getFolders,
+  repairCipherAttachmentMetadata,
   updateFolder,
 } from '@/lib/api/vault';
 import { silentlyRepairBackupSettingsIfNeeded } from '@/lib/backup-settings-repair';
-import { base64ToBytes, decryptBw, decryptStr } from '@/lib/crypto';
+import { base64ToBytes, decryptBw, decryptStr, encryptBw } from '@/lib/crypto';
 import {
   buildPublicSendUrl,
   deriveSendKeyParts,
@@ -40,15 +42,14 @@ import {
   type CompletedLogin,
   readInitialAppBootstrapState,
   performPasswordLogin,
-  performPasskeyLogin,
   performRecoverTwoFactorLogin,
   performRegistration,
   performTotpLogin,
+  hydrateLockedSession,
   performUnlock,
   type JwtUnsafeReason,
   type PendingTotp,
 } from '@/lib/app-auth';
-import { passkeySupported } from '@/lib/passkey';
 import useAccountSecurityActions from '@/hooks/useAccountSecurityActions';
 import useAdminActions from '@/hooks/useAdminActions';
 import useBackupActions from '@/hooks/useBackupActions';
@@ -58,6 +59,17 @@ import { t } from '@/lib/i18n';
 import { APP_NOTIFY_EVENT, type AppNotifyDetail } from '@/lib/app-notify';
 import { dispatchBackupProgress, type BackupProgressDetail } from '@/lib/backup-restore-progress';
 import type { AppPhase, Cipher, Folder as VaultFolder, Profile, Send, SessionState } from '@/lib/types';
+
+function isBackupProgressDetail(value: unknown): value is BackupProgressDetail {
+  if (!value || typeof value !== 'object') return false;
+  const detail = value as Record<string, unknown>;
+  const operation = detail.operation;
+  return (
+    (operation === 'backup-restore' || operation === 'backup-export' || operation === 'backup-remote-run')
+    && typeof detail.step === 'string'
+    && typeof detail.fileName === 'string'
+  );
+}
 
 const IMPORT_ROUTE = '/backup/import-export';
 const IMPORT_ROUTE_PATHS = [IMPORT_ROUTE, '/tools/import', '/tools/import-export', '/tools/import-data', '/import', '/import-export'] as const;
@@ -72,48 +84,12 @@ const SIGNALR_UPDATE_TYPE_DEVICE_STATUS = 12;
 const SIGNALR_UPDATE_TYPE_BACKUP_RESTORE_PROGRESS = 13;
 
 type ThemePreference = 'system' | 'light' | 'dark';
-const MAGNETIC_SELECTOR = '.topbar .btn, .topbar .user-chip, .side-link, .mobile-tab';
+type LockTimeoutMinutes = 0 | 1 | 5 | 15 | 30;
+type SessionTimeoutAction = 'lock' | 'logout';
 
-function installMagneticUiFeedback() {
-  if (typeof window === 'undefined' || typeof document === 'undefined') return () => {};
-  if (typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return () => {};
-  if (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches) return () => {};
-
-  const resetNode = (node: HTMLElement) => {
-    node.style.setProperty('--mag-x', '0px');
-    node.style.setProperty('--mag-y', '0px');
-    node.style.removeProperty('--mx');
-    node.style.removeProperty('--my');
-  };
-
-  const onPointerMove = (event: PointerEvent) => {
-    const node = event.target instanceof Element ? event.target.closest<HTMLElement>(MAGNETIC_SELECTOR) : null;
-    if (!node) return;
-    const rect = node.getBoundingClientRect();
-    const localX = event.clientX - rect.left;
-    const localY = event.clientY - rect.top;
-    const dx = (localX - rect.width / 2) / Math.max(rect.width / 2, 1);
-    const dy = (localY - rect.height / 2) / Math.max(rect.height / 2, 1);
-    node.style.setProperty('--mx', `${localX}px`);
-    node.style.setProperty('--my', `${localY}px`);
-    node.style.setProperty('--mag-x', `${dx * 6}px`);
-    node.style.setProperty('--mag-y', `${dy * 4}px`);
-  };
-
-  const onPointerLeave = (event: Event) => {
-    const node = event.target instanceof Element ? event.target.closest<HTMLElement>(MAGNETIC_SELECTOR) : null;
-    if (!node) return;
-    resetNode(node);
-  };
-
-  document.addEventListener('pointermove', onPointerMove, { passive: true });
-  document.addEventListener('pointerleave', onPointerLeave, true);
-
-  return () => {
-    document.removeEventListener('pointermove', onPointerMove);
-    document.removeEventListener('pointerleave', onPointerLeave, true);
-  };
-}
+const LOCK_TIMEOUT_STORAGE_KEY = 'nodewarden.lock.timeout-minutes.v1';
+const SESSION_TIMEOUT_ACTION_STORAGE_KEY = 'nodewarden.session.timeout-action.v1';
+const LOCK_TIMEOUT_VALUES = new Set<LockTimeoutMinutes>([0, 1, 5, 15, 30]);
 
 function readThemePreference(): ThemePreference {
   if (typeof window === 'undefined') return 'system';
@@ -127,14 +103,27 @@ function resolveSystemTheme(): 'light' | 'dark' {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
+function readLockTimeoutMinutes(): LockTimeoutMinutes {
+  if (typeof window === 'undefined') return 15;
+  const value = Number(window.localStorage.getItem(LOCK_TIMEOUT_STORAGE_KEY));
+  return LOCK_TIMEOUT_VALUES.has(value as LockTimeoutMinutes) ? (value as LockTimeoutMinutes) : 15;
+}
+
+function readSessionTimeoutAction(): SessionTimeoutAction {
+  if (typeof window === 'undefined') return 'lock';
+  const value = String(window.localStorage.getItem(SESSION_TIMEOUT_ACTION_STORAGE_KEY) || '').trim();
+  return value === 'logout' ? 'logout' : 'lock';
+}
+
 export default function App() {
   const initialBootstrap = useMemo(() => readInitialAppBootstrapState(), []);
   const initialInviteCode = useMemo(() => readInviteCodeFromUrl(), []);
+  const initialProfileSnapshot = useMemo(() => loadProfileSnapshot(initialBootstrap.session?.email), [initialBootstrap]);
   const [pendingAuthAction, setPendingAuthAction] = useState<'login' | 'register' | 'unlock' | null>(null);
   const [location, navigate] = useLocation();
   const [phase, setPhase] = useState<AppPhase>(initialBootstrap.phase);
   const [session, setSessionState] = useState<SessionState | null>(initialBootstrap.session);
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(initialProfileSnapshot);
   const [defaultKdfIterations, setDefaultKdfIterations] = useState(initialBootstrap.defaultKdfIterations);
   const [jwtWarning, setJwtWarning] = useState<{ reason: JwtUnsafeReason; minLength: number } | null>(initialBootstrap.jwtWarning);
 
@@ -159,21 +148,28 @@ export default function App() {
   const [inviteCodeFromUrl, setInviteCodeFromUrl] = useState(initialInviteCode);
   const [unlockPassword, setUnlockPassword] = useState('');
   const [pendingTotp, setPendingTotp] = useState<PendingTotp | null>(null);
-  const [pendingPasskeyTotp, setPendingPasskeyTotp] = useState(false);
+  const [pendingTotpMode, setPendingTotpMode] = useState<'login' | 'unlock' | null>(null);
   const [totpCode, setTotpCode] = useState('');
   const [rememberDevice, setRememberDevice] = useState(true);
+  const [totpSubmitting, setTotpSubmitting] = useState(false);
 
   const [disableTotpOpen, setDisableTotpOpen] = useState(false);
   const [disableTotpPassword, setDisableTotpPassword] = useState('');
+  const [disableTotpSubmitting, setDisableTotpSubmitting] = useState(false);
   const [recoverValues, setRecoverValues] = useState({ email: '', password: '', recoveryCode: '' });
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => readThemePreference());
   const [systemTheme, setSystemTheme] = useState<'light' | 'dark'>(() => resolveSystemTheme());
+  const [lockTimeoutMinutes, setLockTimeoutMinutesState] = useState<LockTimeoutMinutes>(() => readLockTimeoutMinutes());
+  const [sessionTimeoutAction, setSessionTimeoutActionState] = useState<SessionTimeoutAction>(() => readSessionTimeoutAction());
+  const [unlockPreparing, setUnlockPreparing] = useState(() => initialBootstrap.phase === 'locked' && !initialBootstrap.session?.email);
 
   const [confirm, setConfirm] = useState<AppConfirmState | null>(null);
   const [mobileLayout, setMobileLayout] = useState(false);
+  const [mobileSidebarToggleKey, setMobileSidebarToggleKey] = useState(0);
   const [decryptedFolders, setDecryptedFolders] = useState<VaultFolder[]>([]);
   const [decryptedCiphers, setDecryptedCiphers] = useState<Cipher[]>([]);
   const [decryptedSends, setDecryptedSends] = useState<Send[]>([]);
+  const [vaultInitialDecryptDone, setVaultInitialDecryptDone] = useState(false);
   const sessionRef = useRef<SessionState | null>(initialBootstrap.session);
   const migratedPlainFolderIdsRef = useRef<Set<string>>(new Set());
   const silentRefreshVaultRef = useRef<() => Promise<void>>(async () => {});
@@ -232,7 +228,7 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
-    const media = window.matchMedia('(max-width: 900px)');
+    const media = window.matchMedia('(max-width: 1180px)');
     const sync = () => setMobileLayout(media.matches);
     sync();
     if (typeof media.addEventListener === 'function') {
@@ -269,7 +265,25 @@ export default function App() {
     window.localStorage.setItem(THEME_STORAGE_KEY, themePreference);
   }, [themePreference]);
 
-  useEffect(() => installMagneticUiFeedback(), []);
+  useEffect(() => {
+    saveProfileSnapshot(profile);
+  }, [profile]);
+
+  useEffect(() => {
+    if (phase === 'locked' && session?.email) {
+      setUnlockPreparing(false);
+    }
+  }, [phase, profile, session]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(LOCK_TIMEOUT_STORAGE_KEY, String(lockTimeoutMinutes));
+  }, [lockTimeoutMinutes]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(SESSION_TIMEOUT_ACTION_STORAGE_KEY, sessionTimeoutAction);
+  }, [sessionTimeoutAction]);
 
   function handleToggleTheme() {
     setThemePreference((prev) => {
@@ -282,6 +296,16 @@ export default function App() {
     sessionRef.current = next;
     setSessionState(next);
     saveSession(next);
+  }
+
+  function setLockTimeoutMinutes(next: LockTimeoutMinutes) {
+    setLockTimeoutMinutesState(next);
+    pushToast('success', t('txt_session_timeout_updated'));
+  }
+
+  function setSessionTimeoutAction(next: SessionTimeoutAction) {
+    setSessionTimeoutActionState(next);
+    pushToast('success', t('txt_session_timeout_updated'));
   }
 
   const authedFetch = useMemo(
@@ -330,6 +354,7 @@ export default function App() {
       setSession(boot.session);
       setProfile(boot.profile);
       setPhase(boot.phase);
+      setUnlockPreparing(boot.phase === 'locked' && !boot.session?.email);
     })();
 
     return () => {
@@ -337,17 +362,43 @@ export default function App() {
     };
   }, [initialBootstrap]);
 
-  async function finalizeLogin(login: CompletedLogin) {
+  useEffect(() => {
+    if (phase !== 'locked' || !session) return;
+    let cancelled = false;
+    void (async () => {
+      const result = await hydrateLockedSession(session, profile);
+      if (cancelled) return;
+      if (!result.session) {
+        setSession(null);
+        setProfile(null);
+        setUnlockPreparing(false);
+        setPhase('login');
+        if (location !== '/login') navigate('/login');
+        return;
+      }
+      setSession(result.session);
+      if (result.profile) {
+        setProfile(stripProfileSecrets(result.profile));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [phase, session?.email, location, navigate]);
+
+  async function finalizeLogin(login: CompletedLogin, successMessage = t('txt_login_success')) {
     setSession(login.session);
     setProfile(login.profile);
+    setUnlockPreparing(false);
     setPendingTotp(null);
-    setPendingPasskeyTotp(false);
+    setPendingTotpMode(null);
     setTotpCode('');
+    setUnlockPassword('');
     setPhase('app');
     if (location === '/' || location === '/login' || location === '/register' || location === '/lock') {
       navigate('/vault');
     }
-    pushToast('success', t('txt_login_success'));
+    pushToast('success', successMessage);
     void (async () => {
       try {
         const hydratedProfile = await login.profilePromise;
@@ -374,6 +425,7 @@ export default function App() {
       }
       if (result.kind === 'totp') {
         setPendingTotp(result.pendingTotp);
+        setPendingTotpMode('login');
         setTotpCode('');
         setRememberDevice(true);
         return;
@@ -387,50 +439,20 @@ export default function App() {
   }
 
   async function handleTotpVerify() {
-    if (!pendingTotp && !pendingPasskeyTotp) return;
+    if (totpSubmitting) return;
+    if (!pendingTotp) return;
     if (!totpCode.trim()) {
       pushToast('error', t('txt_please_input_totp_code'));
       return;
     }
+    setTotpSubmitting(true);
     try {
-      const login = pendingTotp
-        ? await performTotpLogin(pendingTotp, totpCode, rememberDevice)
-        : (await (async () => {
-            const passkeyResult = await performPasskeyLogin(loginValues.email, totpCode);
-            if (passkeyResult.kind !== 'success') throw new Error(t('txt_totp_verify_failed'));
-            return passkeyResult.login;
-          })());
-      await finalizeLogin(login);
+      const login = await performTotpLogin(pendingTotp, totpCode, rememberDevice);
+      await finalizeLogin(login, pendingTotpMode === 'unlock' ? t('txt_unlocked') : t('txt_login_success'));
     } catch (error) {
       pushToast('error', error instanceof Error ? error.message : t('txt_totp_verify_failed'));
-    }
-  }
-
-  async function handlePasskeyLogin() {
-    if (pendingAuthAction) return;
-    if (!passkeySupported()) {
-      pushToast('error', '当前浏览器不支持 Passkey');
-      return;
-    }
-    setPendingAuthAction('login');
-    try {
-      const result = await performPasskeyLogin(loginValues.email);
-      if (result.kind === 'success') {
-        await finalizeLogin(result.login);
-        return;
-      }
-      if (result.kind === 'totp') {
-        setPendingPasskeyTotp(true);
-        setPendingTotp(null);
-        setTotpCode('');
-        setRememberDevice(false);
-        return;
-      }
-      pushToast('error', result.message || t('txt_login_failed'));
-    } catch (error) {
-      pushToast('error', error instanceof Error ? error.message : t('txt_login_failed'));
     } finally {
-      setPendingAuthAction(null);
+      setTotpSubmitting(false);
     }
   }
 
@@ -549,19 +571,26 @@ export default function App() {
 
   async function handleUnlock() {
     if (pendingAuthAction) return;
-    if (!session || !profile) return;
+    if (!session?.email) return;
     if (!unlockPassword) {
       pushToast('error', t('txt_please_input_master_password'));
       return;
     }
     setPendingAuthAction('unlock');
     try {
-      const nextSession = await performUnlock(session, profile, unlockPassword, defaultKdfIterations);
-      setSession(nextSession);
-      setUnlockPassword('');
-      setPhase('app');
-      if (location === '/' || location === '/lock') navigate('/vault');
-      pushToast('success', t('txt_unlocked'));
+      const result = await performUnlock(session, profile, unlockPassword, defaultKdfIterations);
+      if (result.kind === 'success') {
+        await finalizeLogin(result.login, t('txt_unlocked'));
+        return;
+      }
+      if (result.kind === 'totp') {
+        setPendingTotp(result.pendingTotp);
+        setPendingTotpMode('unlock');
+        setTotpCode('');
+        setRememberDevice(true);
+        return;
+      }
+      pushToast('error', result.message || t('txt_unlock_failed_master_password_is_incorrect'));
     } catch {
       pushToast('error', t('txt_unlock_failed_master_password_is_incorrect'));
     } finally {
@@ -569,40 +598,39 @@ export default function App() {
     }
   }
 
-  async function handleCreatePasskey(name: string) {
-    if (!session?.symEncKey || !session?.symMacKey) throw new Error('请先解锁后再创建 Passkey');
-    await registerAccountPasskey(authedFetch, name, session);
-    await passkeysQuery.refetch();
-    pushToast('success', 'Passkey 已创建');
-  }
-
-  async function handleRenamePasskey(id: string, name: string) {
-    await renameAccountPasskey(authedFetch, id, name);
-    await passkeysQuery.refetch();
-  }
-
-  async function handleDeletePasskey(id: string) {
-    await deleteAccountPasskey(authedFetch, id);
-    await passkeysQuery.refetch();
-    pushToast('success', 'Passkey 已删除');
-  }
-
-  function handleLock() {
-    if (!session) return;
-    const nextSession = { ...session };
+  function lockCurrentSession() {
+    const currentSession = sessionRef.current;
+    if (!currentSession) return;
+    const nextSession = { ...currentSession };
     delete nextSession.symEncKey;
     delete nextSession.symMacKey;
     setSession(nextSession);
+    setProfile((prev) => stripProfileSecrets(prev));
+    setDecryptedFolders([]);
+    setDecryptedCiphers([]);
+    setDecryptedSends([]);
+    setUnlockPassword('');
+    setPendingTotp(null);
+    setPendingTotpMode(null);
+    setTotpCode('');
+    setUnlockPreparing(false);
     setPhase('locked');
     navigate('/lock');
   }
 
+  function handleLock() {
+    lockCurrentSession();
+  }
+
   function logoutNow() {
+    void revokeCurrentSession(sessionRef.current);
     setConfirm(null);
     setSession(null);
+    clearProfileSnapshot();
     setProfile(null);
+    setUnlockPreparing(false);
     setPendingTotp(null);
-    setPendingPasskeyTotp(false);
+    setPendingTotpMode(null);
     setPhase('login');
     navigate('/login');
   }
@@ -617,6 +645,62 @@ export default function App() {
       },
     });
   }
+
+  useEffect(() => {
+    if (phase !== 'app' || lockTimeoutMinutes === 0) return;
+    if (typeof window === 'undefined') return;
+
+    let timerId: number | null = null;
+    let lastActivityAt = 0;
+    const timeoutMs = lockTimeoutMinutes * 60 * 1000;
+
+    const clearTimer = () => {
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+        timerId = null;
+      }
+    };
+    const runTimeoutAction = () => {
+      if (sessionTimeoutAction === 'logout') {
+        logoutNow();
+        return;
+      }
+      if (sessionRef.current?.symEncKey || sessionRef.current?.symMacKey) {
+        lockCurrentSession();
+      }
+    };
+    const scheduleTimeout = () => {
+      clearTimer();
+      timerId = window.setTimeout(() => {
+        runTimeoutAction();
+      }, timeoutMs);
+    };
+    const markActivity = () => {
+      const now = Date.now();
+      if (now - lastActivityAt < 1000) return;
+      lastActivityAt = now;
+      scheduleTimeout();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') markActivity();
+    };
+
+    scheduleTimeout();
+    window.addEventListener('pointerdown', markActivity, { passive: true });
+    window.addEventListener('keydown', markActivity);
+    window.addEventListener('scroll', markActivity, { passive: true });
+    window.addEventListener('touchstart', markActivity, { passive: true });
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      clearTimer();
+      window.removeEventListener('pointerdown', markActivity);
+      window.removeEventListener('keydown', markActivity);
+      window.removeEventListener('scroll', markActivity);
+      window.removeEventListener('touchstart', markActivity);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [phase, lockTimeoutMinutes, sessionTimeoutAction]);
 
   function renderPassiveOverlays() {
     return (
@@ -633,11 +717,13 @@ export default function App() {
         onConfirmTotp={() => {}}
         onCancelTotp={() => {}}
         onUseRecoveryCode={() => {}}
+        totpSubmitting={false}
         disableTotpOpen={false}
         disableTotpPassword=""
         onDisableTotpPasswordChange={() => {}}
         onConfirmDisableTotp={() => {}}
         onCancelDisableTotp={() => {}}
+        disableTotpSubmitting={false}
       />
     );
   }
@@ -655,42 +741,38 @@ export default function App() {
   const sendsQuery = useQuery({
     queryKey: ['sends', session?.accessToken],
     queryFn: () => getSends(authedFetch),
-    enabled: phase === 'app' && !!session?.symEncKey && !!session?.symMacKey,
+    enabled: phase === 'app' && !!session?.symEncKey && !!session?.symMacKey && (vaultInitialDecryptDone || location === '/sends'),
   });
   const usersQuery = useQuery({
     queryKey: ['admin-users', session?.accessToken],
     queryFn: () => listAdminUsers(authedFetch),
-    enabled: phase === 'app' && profile?.role === 'admin',
+    enabled: phase === 'app' && profile?.role === 'admin' && vaultInitialDecryptDone,
   });
   const invitesQuery = useQuery({
     queryKey: ['admin-invites', session?.accessToken],
     queryFn: () => listAdminInvites(authedFetch),
-    enabled: phase === 'app' && profile?.role === 'admin',
+    enabled: phase === 'app' && profile?.role === 'admin' && vaultInitialDecryptDone,
   });
   const totpStatusQuery = useQuery({
     queryKey: ['totp-status', session?.accessToken],
     queryFn: () => getTotpStatus(authedFetch),
-    enabled: phase === 'app' && !!session?.accessToken,
+    enabled: phase === 'app' && !!session?.accessToken && vaultInitialDecryptDone,
   });
   const authorizedDevicesQuery = useQuery({
     queryKey: ['authorized-devices', session?.accessToken],
     queryFn: () => getAuthorizedDevices(authedFetch),
-    enabled: phase === 'app' && !!session?.accessToken,
-  });
-  const passkeysQuery = useQuery({
-    queryKey: ['account-passkeys', session?.accessToken],
-    queryFn: () => listAccountPasskeys(authedFetch),
-    enabled: phase === 'app' && !!session?.accessToken,
+    enabled: phase === 'app' && !!session?.accessToken && vaultInitialDecryptDone,
   });
 
   useEffect(() => {
     if (phase !== 'app' || !session?.accessToken || !session?.symEncKey || !session?.symMacKey) return;
+    if (!vaultInitialDecryptDone) return;
     if (!profile?.role || profile.role !== 'admin') return;
     if (repairAttemptRef.current === session.accessToken) return;
 
     repairAttemptRef.current = session.accessToken;
     void silentlyRepairBackupSettingsIfNeeded(session, profile);
-  }, [phase, session?.accessToken, session?.symEncKey, session?.symMacKey, profile]);
+  }, [phase, session?.accessToken, session?.symEncKey, session?.symMacKey, profile, vaultInitialDecryptDone]);
 
   useEffect(() => {
     if (session?.accessToken) return;
@@ -702,9 +784,10 @@ export default function App() {
       setDecryptedFolders([]);
       setDecryptedCiphers([]);
       setDecryptedSends([]);
+      setVaultInitialDecryptDone(false);
       return;
     }
-    if (!foldersQuery.data || !ciphersQuery.data || !sendsQuery.data) return;
+    if (!foldersQuery.data || !ciphersQuery.data) return;
 
     let active = true;
     (async () => {
@@ -723,6 +806,34 @@ export default function App() {
             // Backward-compatibility: some records may already be plain text.
             return value;
           }
+        };
+        const sameBytes = (a: Uint8Array, b: Uint8Array) => {
+          if (a.byteLength !== b.byteLength) return false;
+          for (let i = 0; i < a.byteLength; i += 1) {
+            if (a[i] !== b[i]) return false;
+          }
+          return true;
+        };
+        const decryptFieldWithSource = async (
+          value: string | null | undefined,
+          itemEnc: Uint8Array,
+          itemMac: Uint8Array
+        ): Promise<{ text: string; source: 'item' | 'user' | 'plain' }> => {
+          const raw = String(value || '').trim();
+          if (!raw) return { text: '', source: 'plain' };
+          try {
+            return { text: await decryptStr(raw, itemEnc, itemMac), source: 'item' };
+          } catch {
+            // 继续尝试旧 user key 数据。
+          }
+          if (!sameBytes(itemEnc, encKey) || !sameBytes(itemMac, macKey)) {
+            try {
+              return { text: await decryptStr(raw, encKey, macKey), source: 'user' };
+            } catch {
+              // 保留原文。
+            }
+          }
+          return { text: raw, source: 'plain' };
         };
 
         const folders = await Promise.all(
@@ -757,9 +868,6 @@ export default function App() {
                 decUsername: await decryptField(cipher.login.username || '', itemEnc, itemMac),
                 decPassword: await decryptField(cipher.login.password || '', itemEnc, itemMac),
                 decTotp: await decryptField(cipher.login.totp || '', itemEnc, itemMac),
-                fido2Credentials: Array.isArray(cipher.login.fido2Credentials)
-                  ? cipher.login.fido2Credentials.map((credential) => ({ ...credential }))
-                  : null,
                 uris: await Promise.all(
                   (cipher.login.uris || []).map(async (u) => ({
                     ...u,
@@ -767,6 +875,14 @@ export default function App() {
                   }))
                 ),
               };
+            }
+            if (Array.isArray(cipher.passwordHistory)) {
+              nextCipher.passwordHistory = await Promise.all(
+                cipher.passwordHistory.map(async (entry) => ({
+                  ...entry,
+                  decPassword: await decryptField(entry?.password || '', itemEnc, itemMac),
+                }))
+              );
             }
             if (cipher.card) {
               nextCipher.card = {
@@ -824,51 +940,121 @@ export default function App() {
             }
             if (Array.isArray(cipher.attachments)) {
               nextCipher.attachments = await Promise.all(
-                cipher.attachments.map(async (attachment) => ({
-                  ...attachment,
-                  decFileName: await decryptField(attachment.fileName || '', itemEnc, itemMac),
-                }))
+                cipher.attachments.map(async (attachment) => {
+                  const attachmentId = String(attachment?.id || '').trim();
+                  const fileNameResult = await decryptFieldWithSource(attachment.fileName || '', itemEnc, itemMac);
+                  const metadata: { fileName?: string; key?: string | null } = {};
+
+                  if (attachmentId && fileNameResult.source === 'user') {
+                    metadata.fileName = await encryptBw(new TextEncoder().encode(fileNameResult.text), itemEnc, itemMac);
+                  }
+
+                  const attachmentKey = String(attachment?.key || '').trim();
+                  if (
+                    attachmentId &&
+                    attachmentKey &&
+                    looksLikeCipherString(attachmentKey) &&
+                    (!sameBytes(itemEnc, encKey) || !sameBytes(itemMac, macKey))
+                  ) {
+                    try {
+                      await decryptBw(attachmentKey, itemEnc, itemMac);
+                    } catch {
+                      try {
+                        const rawAttachmentKey = await decryptBw(attachmentKey, encKey, macKey);
+                        if (rawAttachmentKey.length >= 64) {
+                          metadata.key = await encryptBw(rawAttachmentKey, itemEnc, itemMac);
+                        }
+                      } catch {
+                        // 文件下载时会继续尝试旧格式。
+                      }
+                    }
+                  }
+
+                  if (attachmentId && Object.keys(metadata).length > 0) {
+                    void repairCipherAttachmentMetadata(authedFetch, cipher.id, attachmentId, metadata);
+                  }
+
+                  return {
+                    ...attachment,
+                    decFileName: fileNameResult.text,
+                  };
+                })
               );
             }
             return nextCipher;
           })
         );
 
-        const sends = await Promise.all(
-          sendsQuery.data.map(async (send) => {
-            const nextSend: Send = { ...send };
-            try {
-              if (send.key) {
-                const sendKeyRaw = await decryptBw(send.key, encKey, macKey);
-                const derived = await deriveSendKeyParts(sendKeyRaw);
-                nextSend.decName = await decryptField(send.name || '', derived.enc, derived.mac);
-                nextSend.decNotes = await decryptField(send.notes || '', derived.enc, derived.mac);
-                nextSend.decText = await decryptField(send.text?.text || '', derived.enc, derived.mac);
-                if (send.file?.fileName) {
-                  const decFileName = await decryptField(send.file.fileName, derived.enc, derived.mac);
-                  nextSend.file = {
-                    ...(send.file || {}),
-                    fileName: decFileName || send.file.fileName,
-                  };
-                }
-                const shareKey = await buildSendShareKey(send.key, session.symEncKey!, session.symMacKey!);
-                nextSend.decShareKey = shareKey;
-                nextSend.shareUrl = buildPublicSendUrl(window.location.origin, send.accessId, shareKey);
-              } else {
-                nextSend.decName = '';
-                nextSend.decNotes = '';
-                nextSend.decText = '';
-              }
-            } catch {
-              nextSend.decName = t('txt_decrypt_failed');
-            }
-            return nextSend;
-          })
-        );
-
         if (!active) return;
         setDecryptedFolders(folders);
         setDecryptedCiphers(ciphers);
+        setVaultInitialDecryptDone(true);
+      } catch (error) {
+        if (!active) return;
+        pushToast('error', error instanceof Error ? error.message : t('txt_decrypt_failed_2'));
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [session?.symEncKey, session?.symMacKey, foldersQuery.data, ciphersQuery.data]);
+
+  useEffect(() => {
+    if (!session?.symEncKey || !session?.symMacKey) {
+      setDecryptedSends([]);
+      return;
+    }
+    if (!sendsQuery.data) return;
+
+    let active = true;
+    (async () => {
+      try {
+        const encKey = base64ToBytes(session.symEncKey!);
+        const macKey = base64ToBytes(session.symMacKey!);
+        const decryptField = async (
+          value: string | null | undefined,
+          fieldEnc: Uint8Array = encKey,
+          fieldMac: Uint8Array = macKey
+        ): Promise<string> => {
+          if (!value || typeof value !== 'string') return '';
+          try {
+            return await decryptStr(value, fieldEnc, fieldMac);
+          } catch {
+            return value;
+          }
+        };
+        const sends = await Promise.all(sendsQuery.data.map(async (send) => {
+          const nextSend: Send = { ...send };
+          try {
+            if (send.key) {
+              const sendKeyRaw = await decryptBw(send.key, encKey, macKey);
+              const derived = await deriveSendKeyParts(sendKeyRaw);
+              nextSend.decName = await decryptField(send.name || '', derived.enc, derived.mac);
+              nextSend.decNotes = await decryptField(send.notes || '', derived.enc, derived.mac);
+              nextSend.decText = await decryptField(send.text?.text || '', derived.enc, derived.mac);
+              if (send.file?.fileName) {
+                const decFileName = await decryptField(send.file.fileName, derived.enc, derived.mac);
+                nextSend.file = {
+                  ...(send.file || {}),
+                  fileName: decFileName || send.file.fileName,
+                };
+              }
+              const shareKey = await buildSendShareKey(send.key, session.symEncKey!, session.symMacKey!);
+              nextSend.decShareKey = shareKey;
+              nextSend.shareUrl = buildPublicSendUrl(window.location.origin, send.accessId, shareKey);
+            } else {
+              nextSend.decName = '';
+              nextSend.decNotes = '';
+              nextSend.decText = '';
+            }
+          } catch {
+            nextSend.decName = t('txt_decrypt_failed');
+          }
+          return nextSend;
+        }));
+
+        if (!active) return;
         setDecryptedSends(sends);
       } catch (error) {
         if (!active) return;
@@ -879,7 +1065,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [session?.symEncKey, session?.symMacKey, foldersQuery.data, ciphersQuery.data, sendsQuery.data]);
+  }, [session?.symEncKey, session?.symMacKey, sendsQuery.data]);
 
   useEffect(() => {
     if (!session?.symEncKey || !session?.symMacKey || !foldersQuery.data?.length) return;
@@ -913,7 +1099,7 @@ export default function App() {
   silentRefreshVaultRef.current = refreshVaultSilently;
 
   useEffect(() => {
-    if (phase !== 'app' || !session?.accessToken || !session?.symEncKey || !session?.symMacKey) return;
+    if (phase !== 'app' || !session?.accessToken || !session?.symEncKey || !session?.symMacKey || !vaultInitialDecryptDone) return;
 
     let disposed = false;
     let socket: WebSocket | null = null;
@@ -940,9 +1126,11 @@ export default function App() {
 
     const connect = () => {
       if (disposed) return;
+      const accessToken = session.accessToken;
+      if (!accessToken) return;
       try {
         const hubUrl = new URL('/notifications/hub', window.location.origin);
-        hubUrl.searchParams.set('access_token', session.accessToken);
+        hubUrl.searchParams.set('access_token', accessToken);
         hubUrl.protocol = hubUrl.protocol === 'https:' ? 'wss:' : 'ws:';
         socket = new WebSocket(hubUrl.toString());
       } catch {
@@ -996,17 +1184,7 @@ export default function App() {
           }
           if (updateType === SIGNALR_UPDATE_TYPE_BACKUP_RESTORE_PROGRESS) {
             const payload = frame.arguments?.[0]?.Payload;
-            if (
-              payload
-              && typeof payload === 'object'
-              && (
-                payload.operation === 'backup-restore'
-                || payload.operation === 'backup-export'
-                || payload.operation === 'backup-remote-run'
-              )
-            ) {
-              dispatchBackupProgress(payload as BackupProgressDetail);
-            }
+            if (isBackupProgressDetail(payload)) dispatchBackupProgress(payload);
             continue;
           }
           if (updateType !== SIGNALR_UPDATE_TYPE_SYNC_VAULT) continue;
@@ -1047,7 +1225,7 @@ export default function App() {
         }
       }
     };
-  }, [phase, session?.accessToken, session?.symEncKey, session?.symMacKey]);
+  }, [phase, session?.accessToken, session?.symEncKey, session?.symMacKey, vaultInitialDecryptDone]);
 
   const vaultSendActions = useVaultSendActions({
     authedFetch,
@@ -1087,6 +1265,7 @@ export default function App() {
   });
 
   refreshAuthorizedDevicesRef.current = async () => {
+    if (!vaultInitialDecryptDone) return;
     await authorizedDevicesQuery.refetch();
   };
 
@@ -1149,6 +1328,7 @@ export default function App() {
     profile,
     session,
     mobileLayout,
+    mobileSidebarToggleKey,
     importRoute: IMPORT_ROUTE,
     settingsHomeRoute: SETTINGS_HOME_ROUTE,
     settingsAccountRoute: SETTINGS_ACCOUNT_ROUTE,
@@ -1161,6 +1341,8 @@ export default function App() {
     users: usersQuery.data || [],
     invites: invitesQuery.data || [],
     totpEnabled: !!totpStatusQuery.data?.enabled,
+    lockTimeoutMinutes,
+    sessionTimeoutAction,
     authorizedDevices: authorizedDevicesQuery.data || [],
     authorizedDevicesLoading: authorizedDevicesQuery.isFetching,
     onNavigate: navigate,
@@ -1205,11 +1387,12 @@ export default function App() {
     },
     onOpenDisableTotp: () => setDisableTotpOpen(true),
     onGetRecoveryCode: accountSecurityActions.getRecoveryCode,
-    passkeys: passkeysQuery.data || [],
-    onCreatePasskey: handleCreatePasskey,
-    onRenamePasskey: handleRenamePasskey,
-    onDeletePasskey: handleDeletePasskey,
+    onGetApiKey: accountSecurityActions.getApiKey,
+    onRotateApiKey: accountSecurityActions.rotateApiKey,
+    onLockTimeoutChange: setLockTimeoutMinutes,
+    onSessionTimeoutActionChange: setSessionTimeoutAction,
     onRefreshAuthorizedDevices: accountSecurityActions.refreshAuthorizedDevices,
+    onRenameAuthorizedDevice: accountSecurityActions.renameAuthorizedDevice,
     onRevokeDeviceTrust: accountSecurityActions.openRevokeDeviceTrust,
     onRemoveDevice: accountSecurityActions.openRemoveDevice,
     onRevokeAllDeviceTrust: accountSecurityActions.openRevokeAllDeviceTrust,
@@ -1270,7 +1453,8 @@ export default function App() {
         <AuthViews
           mode={phase}
           pendingAction={pendingAuthAction}
-          unlockReady={!!profile}
+          unlockReady={!!session?.email}
+          unlockPreparing={unlockPreparing}
           loginValues={loginValues}
           registerValues={registerValues}
           unlockPassword={unlockPassword}
@@ -1280,7 +1464,6 @@ export default function App() {
           onChangeRegister={setRegisterValues}
           onChangeUnlock={setUnlockPassword}
           onSubmitLogin={() => void handleLogin()}
-          onSubmitPasskey={() => void handlePasskeyLogin()}
           onSubmitRegister={() => void handleRegister()}
           onSubmitUnlock={() => void handleUnlock()}
           onGotoLogin={() => {
@@ -1297,37 +1480,40 @@ export default function App() {
           onLogout={logoutNow}
           onTogglePasswordHint={() => void handleTogglePasswordHint()}
           onShowLockedPasswordHint={handleShowLockedPasswordHint}
-          passkeySupported={passkeySupported()}
         />
         <AppGlobalOverlays
           toasts={toasts}
           onCloseToast={removeToast}
           confirm={confirm}
           onCancelConfirm={() => setConfirm(null)}
-          pendingTotpOpen={!!pendingTotp || pendingPasskeyTotp}
+          pendingTotpOpen={!!pendingTotp}
           totpCode={totpCode}
           rememberDevice={rememberDevice}
           onTotpCodeChange={setTotpCode}
           onRememberDeviceChange={setRememberDevice}
           onConfirmTotp={() => void handleTotpVerify()}
           onCancelTotp={() => {
+            if (totpSubmitting) return;
             setPendingTotp(null);
-            setPendingPasskeyTotp(false);
+            setPendingTotpMode(null);
             setTotpCode('');
             setRememberDevice(true);
           }}
           onUseRecoveryCode={() => {
+            if (totpSubmitting) return;
             setPendingTotp(null);
-            setPendingPasskeyTotp(false);
+            setPendingTotpMode(null);
             setTotpCode('');
             setRememberDevice(true);
             navigate('/recover-2fa');
           }}
+          totpSubmitting={totpSubmitting}
           disableTotpOpen={false}
           disableTotpPassword=""
           onDisableTotpPasswordChange={() => {}}
           onConfirmDisableTotp={() => {}}
           onCancelDisableTotp={() => {}}
+          disableTotpSubmitting={false}
         />
       </>
     );
@@ -1350,6 +1536,7 @@ export default function App() {
         onLock={handleLock}
         onLogout={handleLogout}
         onToggleTheme={handleToggleTheme}
+        onToggleMobileSidebar={() => setMobileSidebarToggleKey((key) => key + 1)}
         mainRoutesProps={mainRoutesProps}
       />
 
@@ -1366,14 +1553,27 @@ export default function App() {
         onConfirmTotp={() => {}}
         onCancelTotp={() => {}}
         onUseRecoveryCode={() => {}}
+        totpSubmitting={false}
         disableTotpOpen={disableTotpOpen}
         disableTotpPassword={disableTotpPassword}
         onDisableTotpPasswordChange={setDisableTotpPassword}
-        onConfirmDisableTotp={() => void accountSecurityActions.disableTotp()}
+        onConfirmDisableTotp={() => {
+          if (disableTotpSubmitting) return;
+          void (async () => {
+            setDisableTotpSubmitting(true);
+            try {
+              await accountSecurityActions.disableTotp();
+            } finally {
+              setDisableTotpSubmitting(false);
+            }
+          })();
+        }}
         onCancelDisableTotp={() => {
+          if (disableTotpSubmitting) return;
           setDisableTotpOpen(false);
           setDisableTotpPassword('');
         }}
+        disableTotpSubmitting={disableTotpSubmitting}
       />
     </>
   );

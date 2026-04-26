@@ -1,3 +1,4 @@
+import type { JSX } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { Clipboard, Globe, GripVertical } from 'lucide-preact';
 import {
@@ -34,6 +35,14 @@ const TOTP_RING_CIRCUMFERENCE = 2 * Math.PI * TOTP_RING_RADIUS;
 const TOTP_ORDER_STORAGE_KEY = 'nodewarden.totp-order';
 const failedIconHosts = new Set<string>();
 
+function getTotpTimeState(): { windowId: number; remain: number } {
+  const epoch = Math.floor(Date.now() / 1000);
+  return {
+    windowId: Math.floor(epoch / TOTP_PERIOD_SECONDS),
+    remain: TOTP_PERIOD_SECONDS - (epoch % TOTP_PERIOD_SECONDS),
+  };
+}
+
 function formatTotp(code: string): string {
   if (!code) return code;
   if (code.length === 5) return `${code.slice(0, 2)} ${code.slice(2)}`;
@@ -64,19 +73,41 @@ function TotpListIcon({ cipher }: { cipher: Cipher }) {
   const uri = firstCipherUri(cipher);
   const host = hostFromUri(uri);
   const [errored, setErrored] = useState(() => (host ? failedIconHosts.has(host) : false));
+  const [loaded, setLoaded] = useState(false);
+  const markIconError = () => {
+    if (host) failedIconHosts.add(host);
+    setErrored(true);
+  };
+  const syncCachedIconState = (img: HTMLImageElement | null) => {
+    if (!img || !img.complete) return;
+    if (img.naturalWidth > 0) {
+      setLoaded(true);
+      return;
+    }
+    markIconError();
+  };
+  useEffect(() => {
+    setErrored(host ? failedIconHosts.has(host) : false);
+    setLoaded(false);
+  }, [host]);
+
   if (host && !errored) {
     return (
-      <img
-        className="list-icon"
-        src={websiteIconUrl(host)}
-        alt=""
-        loading="lazy"
-        referrerPolicy="no-referrer"
-        onError={() => {
-          failedIconHosts.add(host);
-          setErrored(true);
-        }}
-      />
+      <span className="list-icon-stack">
+        <span className={`list-icon-fallback ${loaded ? 'hidden' : ''}`}>
+          <Globe size={18} />
+        </span>
+        <img
+          className={`list-icon ${loaded ? 'loaded' : ''}`}
+          src={websiteIconUrl(host)}
+          alt=""
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          ref={syncCachedIconState}
+          onLoad={() => setLoaded(true)}
+          onError={markIconError}
+        />
+      </span>
     );
   }
   return (
@@ -96,6 +127,7 @@ function SortableTotpRow(props: SortableTotpRowProps) {
   const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } = useSortable({
     id: props.cipher.id,
   });
+  const dragButtonAttributes = attributes as JSX.HTMLAttributes<HTMLButtonElement>;
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -113,7 +145,7 @@ function SortableTotpRow(props: SortableTotpRowProps) {
         className="btn btn-secondary small totp-drag-btn"
         title={t('txt_drag_to_reorder')}
         aria-label={t('txt_drag_to_reorder')}
-        {...attributes}
+        {...dragButtonAttributes}
         {...listeners}
       >
         <GripVertical size={14} className="btn-icon" />
@@ -162,7 +194,8 @@ function SortableTotpRow(props: SortableTotpRowProps) {
 }
 
 export default function TotpCodesPage(props: TotpCodesPageProps) {
-  const [totpMap, setTotpMap] = useState<Record<string, { code: string; remain: number } | null>>({});
+  const [totpCodes, setTotpCodes] = useState<Record<string, string | null>>({});
+  const [remainingSeconds, setRemainingSeconds] = useState(() => getTotpTimeState().remain);
   const [columnCount, setColumnCount] = useState(1);
   const [orderedIds, setOrderedIds] = useState<string[]>(() => {
     if (typeof window === 'undefined') return [];
@@ -245,26 +278,39 @@ export default function TotpCodesPage(props: TotpCodesPageProps) {
 
   useEffect(() => {
     if (!totpItems.length) {
-      setTotpMap({});
+      setTotpCodes({});
       return;
     }
     let stopped = false;
+    let activeRun = 0;
     let timer = 0;
-    const tick = async () => {
+    let currentWindowId = -1;
+
+    const refreshCodes = async () => {
+      const runId = ++activeRun;
       const entries = await Promise.all(
         totpItems.map(async (cipher) => {
           try {
             const next = await calcTotpNow(cipher.login?.decTotp || '');
-            return [cipher.id, next] as const;
+            return [cipher.id, next?.code || null] as const;
           } catch {
             return [cipher.id, null] as const;
           }
         })
       );
-      if (!stopped) setTotpMap(Object.fromEntries(entries));
+      if (!stopped && runId === activeRun) setTotpCodes(Object.fromEntries(entries));
     };
-    void tick();
-    timer = window.setInterval(() => void tick(), 1000);
+
+    const tick = () => {
+      const next = getTotpTimeState();
+      setRemainingSeconds((prev) => (prev === next.remain ? prev : next.remain));
+      if (next.windowId === currentWindowId) return;
+      currentWindowId = next.windowId;
+      void refreshCodes();
+    };
+
+    tick();
+    timer = window.setInterval(tick, 1000);
     return () => {
       stopped = true;
       window.clearInterval(timer);
@@ -320,7 +366,7 @@ export default function TotpCodesPage(props: TotpCodesPageProps) {
                 <SortableTotpRow
                   key={cipher.id}
                   cipher={cipher}
-                  live={totpMap[cipher.id] || null}
+                  live={totpCodes[cipher.id] ? { code: totpCodes[cipher.id] || '', remain: remainingSeconds } : null}
                   onCopy={(value) => void copyToClipboard(value)}
                 />
               ))}

@@ -72,7 +72,6 @@ export default {
 
     await ensureDatabaseInitialized(env);
     if (dbInitError) {
-      // Log full error server-side, return generic message to client.
       console.error('DB init error (not forwarded to client):', dbInitError);
       const resp = jsonResponse(
         {

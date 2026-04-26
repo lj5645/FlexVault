@@ -293,7 +293,9 @@ async function mapCipherPlain(cipher: Cipher, userEnc: Uint8Array, userMac: Uint
           )
         : [],
       fido2Credentials: Array.isArray(cipher.login.fido2Credentials)
-        ? await Promise.all(cipher.login.fido2Credentials.map((credential) => deepDecryptUnknown(credential, keyParts.enc, keyParts.mac)))
+        ? await Promise.all(
+            cipher.login.fido2Credentials.map((credential) => deepDecryptUnknown(credential, keyParts.enc, keyParts.mac))
+          )
         : [],
     };
   } else {

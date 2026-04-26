@@ -24,7 +24,6 @@ interface CiphersImportRequest {
       password?: string | null;
       totp?: string | null;
       autofillOnPageLoad?: boolean | null;
-      fido2Credentials?: any[] | null;
       uri?: string | null;
       passwordRevisionDate?: string | null;
       [key: string]: any;
@@ -81,6 +80,16 @@ interface CiphersImportRequest {
 
 function bindNull(v: any): any {
   return v === undefined ? null : v;
+}
+
+function readAliasedImportProp<T = unknown>(source: any, aliases: string[]): T | undefined {
+  if (!source || typeof source !== 'object') return undefined;
+  for (const key of aliases) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) {
+      return source[key] as T;
+    }
+  }
+  return undefined;
 }
 
 async function runBatchInChunks(db: D1Database, statements: D1PreparedStatement[], chunkSize: number): Promise<void> {
@@ -159,9 +168,16 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
   const cipherMapRows: Array<{ index: number; sourceId: string | null; id: string }> = [];
   for (let i = 0; i < ciphers.length; i++) {
     const c = ciphers[i];
-    const folderId = cipherFolderMap.get(i) || c.folderId || null;
+    const folderId = cipherFolderMap.get(i) || readAliasedImportProp<string | null>(c, ['folderId', 'FolderId']) || null;
     const sourceIdRaw = String(c?.id ?? '').trim();
     const sourceId = sourceIdRaw || null;
+    const login = readAliasedImportProp<any | null>(c, ['login', 'Login']);
+    const card = readAliasedImportProp<any | null>(c, ['card', 'Card']);
+    const identity = readAliasedImportProp<any | null>(c, ['identity', 'Identity']);
+    const secureNote = readAliasedImportProp<any | null>(c, ['secureNote', 'SecureNote']);
+    const fields = readAliasedImportProp<any[] | null>(c, ['fields', 'Fields']);
+    const passwordHistory = readAliasedImportProp<any[] | null>(c, ['passwordHistory', 'PasswordHistory']);
+    const key = readAliasedImportProp<string | null>(c, ['key', 'Key']);
 
     const cipher: Cipher = {
       ...c,
@@ -172,64 +188,64 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
       name: c.name ?? 'Untitled',
       notes: c.notes ?? null,
       favorite: c.favorite ?? false,
-      login: c.login ? {
-        ...c.login,
-        username: c.login.username ?? null,
-        password: c.login.password ?? null,
-        uris: c.login.uris?.map(u => ({
+      login: login ? {
+        ...login,
+        username: login.username ?? null,
+        password: login.password ?? null,
+        uris: login.uris?.map((u: any) => ({
           ...u,
           uri: u.uri ?? null,
           uriChecksum: null,
           match: u.match ?? null,
         })) || null,
-        totp: c.login.totp ?? null,
-        autofillOnPageLoad: c.login.autofillOnPageLoad ?? null,
-        fido2Credentials: c.login.fido2Credentials ?? null,
-        uri: c.login.uri ?? null,
-        passwordRevisionDate: c.login.passwordRevisionDate ?? null,
+        totp: login.totp ?? null,
+        autofillOnPageLoad: login.autofillOnPageLoad ?? null,
+        fido2Credentials: Array.isArray(login.fido2Credentials) ? login.fido2Credentials : null,
+        uri: login.uri ?? null,
+        passwordRevisionDate: login.passwordRevisionDate ?? null,
       } : null,
-      card: c.card ? {
-        ...c.card,
-        cardholderName: c.card.cardholderName ?? null,
-        brand: c.card.brand ?? null,
-        number: c.card.number ?? null,
-        expMonth: c.card.expMonth ?? null,
-        expYear: c.card.expYear ?? null,
-        code: c.card.code ?? null,
+      card: card ? {
+        ...card,
+        cardholderName: card.cardholderName ?? null,
+        brand: card.brand ?? null,
+        number: card.number ?? null,
+        expMonth: card.expMonth ?? null,
+        expYear: card.expYear ?? null,
+        code: card.code ?? null,
       } : null,
-      identity: c.identity ? {
-        ...c.identity,
-        title: c.identity.title ?? null,
-        firstName: c.identity.firstName ?? null,
-        middleName: c.identity.middleName ?? null,
-        lastName: c.identity.lastName ?? null,
-        address1: c.identity.address1 ?? null,
-        address2: c.identity.address2 ?? null,
-        address3: c.identity.address3 ?? null,
-        city: c.identity.city ?? null,
-        state: c.identity.state ?? null,
-        postalCode: c.identity.postalCode ?? null,
-        country: c.identity.country ?? null,
-        company: c.identity.company ?? null,
-        email: c.identity.email ?? null,
-        phone: c.identity.phone ?? null,
-        ssn: c.identity.ssn ?? null,
-        username: c.identity.username ?? null,
-        passportNumber: c.identity.passportNumber ?? null,
-        licenseNumber: c.identity.licenseNumber ?? null,
+      identity: identity ? {
+        ...identity,
+        title: identity.title ?? null,
+        firstName: identity.firstName ?? null,
+        middleName: identity.middleName ?? null,
+        lastName: identity.lastName ?? null,
+        address1: identity.address1 ?? null,
+        address2: identity.address2 ?? null,
+        address3: identity.address3 ?? null,
+        city: identity.city ?? null,
+        state: identity.state ?? null,
+        postalCode: identity.postalCode ?? null,
+        country: identity.country ?? null,
+        company: identity.company ?? null,
+        email: identity.email ?? null,
+        phone: identity.phone ?? null,
+        ssn: identity.ssn ?? null,
+        username: identity.username ?? null,
+        passportNumber: identity.passportNumber ?? null,
+        licenseNumber: identity.licenseNumber ?? null,
       } : null,
-      secureNote: c.secureNote ?? null,
-      fields: c.fields?.map(f => ({
+      secureNote: secureNote ?? null,
+      fields: fields?.map((f: any) => ({
         ...f,
         name: f.name ?? null,
         value: f.value ?? null,
         type: f.type,
         linkedId: f.linkedId ?? null,
       })) || null,
-      passwordHistory: c.passwordHistory ?? null,
+      passwordHistory: passwordHistory ?? null,
       reprompt: c.reprompt ?? 0,
       sshKey: normalizeCipherSshKeyForCompatibility((c as any).sshKey ?? null),
-      key: (c as any).key ?? null,
+      key: key ?? null,
       createdAt: now,
       updatedAt: now,
       archivedAt: null,

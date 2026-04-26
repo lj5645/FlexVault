@@ -21,6 +21,7 @@ function folderToResponse(folder: Folder): FolderResponse {
     id: folder.id,
     name: folder.name,
     revisionDate: folder.updatedAt,
+    creationDate: folder.createdAt,
     object: 'folder',
   };
 }

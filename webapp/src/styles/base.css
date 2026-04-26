@@ -1,0 +1,59 @@
+* {
+  @apply box-border;
+}
+
+html,
+body,
+#root {
+  @apply m-0 h-full w-full p-0;
+  color: var(--text);
+  background: var(--bg-accent);
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply relative antialiased;
+  transition: background-color var(--dur-medium) var(--ease-smooth), color var(--dur-medium) var(--ease-smooth);
+}
+
+body.dialog-open {
+  @apply overflow-hidden;
+  overscroll-behavior: contain;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--primary) 20%, transparent);
+  color: var(--text);
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent);
+}
+
+/* --- custom scrollbar --- */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 30%, transparent);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--muted) 50%, transparent);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}

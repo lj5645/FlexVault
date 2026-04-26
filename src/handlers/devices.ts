@@ -23,13 +23,18 @@ function isTrustedDevice(device: Pick<Device, 'encryptedUserKey' | 'encryptedPub
 }
 
 function buildDeviceResponse(device: Device): DeviceResponse {
+  const displayName = String(device.deviceNote || '').trim() || device.name;
   const response = {
     Id: device.deviceIdentifier,
     id: device.deviceIdentifier,
     UserId: device.userId,
     userId: device.userId,
-    Name: device.name,
-    name: device.name,
+    Name: displayName,
+    name: displayName,
+    SystemName: device.name,
+    systemName: device.name,
+    DeviceNote: device.deviceNote,
+    deviceNote: device.deviceNote,
     Identifier: device.deviceIdentifier,
     identifier: device.deviceIdentifier,
     Type: device.type,
@@ -38,6 +43,10 @@ function buildDeviceResponse(device: Device): DeviceResponse {
     creationDate: device.createdAt,
     RevisionDate: device.updatedAt,
     revisionDate: device.updatedAt,
+    LastSeenAt: device.lastSeenAt,
+    lastSeenAt: device.lastSeenAt,
+    HasStoredDevice: true,
+    hasStoredDevice: true,
     IsTrusted: isTrustedDevice(device),
     isTrusted: isTrustedDevice(device),
     EncryptedUserKey: device.encryptedUserKey,
@@ -55,8 +64,12 @@ function buildProtectedDeviceResponse(device: Device): ProtectedDeviceWireRespon
   const response = {
     Id: device.deviceIdentifier,
     id: device.deviceIdentifier,
-    Name: device.name,
-    name: device.name,
+    Name: String(device.deviceNote || '').trim() || device.name,
+    name: String(device.deviceNote || '').trim() || device.name,
+    SystemName: device.name,
+    systemName: device.name,
+    DeviceNote: device.deviceNote,
+    deviceNote: device.deviceNote,
     Identifier: device.deviceIdentifier,
     identifier: device.deviceIdentifier,
     Type: device.type,
@@ -99,6 +112,10 @@ async function readJsonBody(request: Request): Promise<any> {
   } catch {
     return null;
   }
+}
+
+function parseDeviceName(value: unknown): string {
+  return String(value || '').trim().slice(0, 128);
 }
 
 // GET /api/devices/knowndevice
@@ -203,12 +220,15 @@ export async function handleGetAuthorizedDevices(request: Request, env: Env, use
       encryptedPublicKey: null,
       encryptedPrivateKey: null,
       devicePendingAuthRequest: null,
+      deviceNote: null,
+      lastSeenAt: null,
       createdAt: '',
       updatedAt: '',
     };
     data.push({
       ...buildDeviceResponse(placeholderDevice),
       isTrusted: true,
+      hasStoredDevice: false,
       online: onlineSet.has(row.deviceIdentifier),
       trusted: true,
       trustedTokenCount: row.tokenCount,
@@ -267,6 +287,29 @@ export async function handleDeleteDevice(
     await notifyUserLogout(env, userId, normalized);
   }
   return jsonResponse({ success: deleted });
+}
+
+// PUT /api/devices/:deviceIdentifier/name
+export async function handleUpdateDeviceName(
+  request: Request,
+  env: Env,
+  userId: string,
+  deviceIdentifier: string
+): Promise<Response> {
+  const normalized = String(deviceIdentifier || '').trim();
+  if (!normalized) return errorResponse('Invalid device identifier', 400);
+
+  const body = await readJsonBody(request);
+  const name = parseDeviceName(body?.name);
+  if (!name) return errorResponse('Device name is required', 400);
+
+  const storage = new StorageService(env.DB);
+  const updated = await storage.updateDeviceName(userId, normalized, name);
+  if (!updated) return errorResponse('Device not found', 404);
+
+  const device = await storage.getDevice(userId, normalized);
+  if (!device) return errorResponse('Device not found', 404);
+  return jsonResponse(buildDeviceResponse(device));
 }
 
 // DELETE /api/devices

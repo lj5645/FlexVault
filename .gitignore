@@ -9,13 +9,13 @@ RELEASE_NOTES.md
 tests/selfcheck.ts
 problem.md
 
-# Self-hosted data
-data/
-dist-selfhosted/
-
 # Build output
 dist/
 build/
+dist-selfhosted/
+
+# Self-hosted data
+data/
 
 # IDE
 .vscode/
@@ -46,3 +46,5 @@ tmp/
 .tmp/
 
 nodewarden.wiki/
+AGENTS.md
+settings.json

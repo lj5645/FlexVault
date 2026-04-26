@@ -11,6 +11,8 @@ import {
   handleGetTotpStatus,
   handleSetTotpStatus,
   handleGetTotpRecoveryCode,
+  handleGetApiKey,
+  handleRotateApiKey,
 } from './handlers/accounts';
 import {
   handleGetCiphers,
@@ -58,17 +60,11 @@ import {
   handleCreateAttachment,
   handleUploadAttachment,
   handleGetAttachment,
+  handleUpdateAttachmentMetadata,
   handleDeleteAttachment,
 } from './handlers/attachments';
 import { handleAuthenticatedDeviceRoute } from './router-devices';
 import { handleAdminRoute } from './router-admin';
-import {
-  handleBeginPasskeyRegistration,
-  handleDeletePasskey,
-  handleFinishPasskeyRegistration,
-  handleListPasskeys,
-  handleRenamePasskey,
-} from './handlers/passkeys';
 
 export async function handleAuthenticatedRoute(
   request: Request,
@@ -114,24 +110,6 @@ export async function handleAuthenticatedRoute(
     return handleGetTotpRecoveryCode(request, env, userId);
   }
 
-  if (path === '/api/accounts/passkeys' && method === 'GET') {
-    return handleListPasskeys(request, env, userId);
-  }
-
-  if (path === '/api/accounts/passkeys/begin-registration' && method === 'POST') {
-    return handleBeginPasskeyRegistration(request, env, userId);
-  }
-
-  if (path === '/api/accounts/passkeys/finish-registration' && method === 'POST') {
-    return handleFinishPasskeyRegistration(request, env, userId);
-  }
-
-  const passkeyMatch = path.match(/^\/api\/accounts\/passkeys\/([a-f0-9-]+)$/i);
-  if (passkeyMatch) {
-    if (method === 'PATCH' || method === 'PUT') return handleRenamePasskey(request, env, userId, passkeyMatch[1]);
-    if (method === 'DELETE') return handleDeletePasskey(request, env, userId, passkeyMatch[1]);
-  }
-
   if (path === '/api/accounts/revision-date' && method === 'GET') {
     return handleGetRevisionDate(request, env, userId);
   }
@@ -142,6 +120,14 @@ export async function handleAuthenticatedRoute(
 
   if (path === '/api/accounts/verify-devices' && (method === 'PUT' || method === 'POST')) {
     return handleSetVerifyDevices(request, env, userId);
+  }
+
+  if ((path === '/api/accounts/api-key' || path === '/api/accounts/api_key') && method === 'POST') {
+    return handleGetApiKey(request, env, userId);
+  }
+
+  if ((path === '/api/accounts/rotate-api-key' || path === '/api/accounts/rotate_api_key') && method === 'POST') {
+    return handleRotateApiKey(request, env, userId);
   }
 
   if (path === '/api/sync' && method === 'GET') {
@@ -214,6 +200,11 @@ export async function handleAuthenticatedRoute(
       if (method === 'POST' || method === 'PUT') return handleUploadAttachment(request, env, userId, cipherId, attachmentId);
       if (method === 'GET') return handleGetAttachment(request, env, userId, cipherId, attachmentId);
       if (method === 'DELETE') return handleDeleteAttachment(request, env, userId, cipherId, attachmentId);
+    }
+
+    const attachmentMetadataMatch = subPath.match(/^\/attachment\/([a-f0-9-]+)\/metadata$/i);
+    if (attachmentMetadataMatch && (method === 'POST' || method === 'PUT')) {
+      return handleUpdateAttachmentMetadata(request, env, userId, cipherId, attachmentMetadataMatch[1]);
     }
 
     const attachmentDeleteMatch = subPath.match(/^\/attachment\/([a-f0-9-]+)\/delete$/i);

@@ -19,6 +19,71 @@ export function normalizeUri(raw: string): string | null {
   return s.slice(0, 1000);
 }
 
+export function normalizeUriList(rawUris: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of rawUris) {
+    const uri = normalizeUri(raw);
+    if (!uri) continue;
+    const key = uri.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(uri);
+  }
+  return out;
+}
+
+export function setLoginUris(login: Record<string, unknown>, rawUris: string[]): void {
+  const uris = normalizeUriList(rawUris);
+  login.uris = uris.length ? uris.map((uri) => ({ uri, match: null })) : null;
+}
+
+export function addLoginUri(login: Record<string, unknown>, rawUri: string): void {
+  const existing = Array.isArray(login.uris)
+    ? login.uris.map((entry) => txt((entry as Record<string, unknown>)?.uri)).filter(Boolean)
+    : [];
+  setLoginUris(login, [...existing, rawUri]);
+}
+
+export function isTotpFieldName(raw: unknown): boolean {
+  const name = txt(raw).toLowerCase().replace(/[\s_-]+/g, '');
+  if (!name) return false;
+  return [
+    'totp',
+    'totpuri',
+    'otp',
+    'otpuri',
+    'otpurl',
+    'otpauth',
+    'onetimepassword',
+    'onetimepasscode',
+    '2fa',
+    'twofactor',
+    'twofactorauthentication',
+    'authenticator',
+    'verificationcode',
+  ].includes(name);
+}
+
+export function extractTotpValue(raw: unknown): string {
+  if (raw === null || raw === undefined) return '';
+  if (typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean') return txt(raw);
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      const value = extractTotpValue(item);
+      if (value) return value;
+    }
+    return '';
+  }
+  if (typeof raw !== 'object') return '';
+  const obj = raw as Record<string, unknown>;
+  for (const key of ['totpUri', 'otpAuth', 'otpauth', 'uri', 'url', 'secret', 'totp', 'otp', 'value', 'code']) {
+    const value = extractTotpValue(obj[key]);
+    if (value) return value;
+  }
+  return '';
+}
+
 export function parseSerializedUris(raw: string): string[] {
   const source = txt(raw);
   if (!source) return [];
@@ -38,15 +103,7 @@ export function parseSerializedUris(raw: string): string[] {
             .filter(Boolean)
         : [source];
 
-  const seen = new Set<string>();
-  const uris: string[] = [];
-  for (const part of parts) {
-    const normalized = normalizeUri(part);
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
-    uris.push(normalized);
-  }
-  return uris;
+  return normalizeUriList(parts);
 }
 
 export function nameFromUrl(raw: string): string | null {
@@ -148,7 +205,7 @@ export function parseCsv(raw: string): CsvRow[] {
   rows.push(row);
   const nonEmpty = rows.filter((r) => r.some((c) => txt(c)));
   if (!nonEmpty.length) return [];
-  const headers = nonEmpty[0].map((h) => txt(h));
+  const headers = nonEmpty[0].map((h, index) => txt(index === 0 ? h.replace(/^\uFEFF/, '') : h));
   const out: CsvRow[] = [];
   for (let i = 1; i < nonEmpty.length; i++) {
     const values = nonEmpty[i];
@@ -206,9 +263,12 @@ export function processKvp(cipher: Record<string, unknown>, key: string, value: 
   const v = txt(value);
   if (!v) return;
   const fields = Array.isArray(cipher.fields) ? (cipher.fields as Array<Record<string, unknown>>) : [];
+  if (fields.some((field) => txt(field.name) === k && txt(field.value) === v)) return;
   if (v.length > 200 || /\r\n|\r|\n/.test(v)) {
     const existing = txt(cipher.notes);
-    cipher.notes = `${existing}${existing ? '\n' : ''}${k ? `${k}: ` : ''}${v}`;
+    const entry = `${k ? `${k}: ` : ''}${v}`;
+    if (existing.split('\n').some((line) => line === entry)) return;
+    cipher.notes = `${existing}${existing ? '\n' : ''}${entry}`;
     return;
   }
   fields.push({ type: hidden ? 1 : 0, name: k, value: v, linkedId: null });
@@ -223,7 +283,7 @@ export function makeLoginCipher(): Record<string, unknown> {
     favorite: false,
     reprompt: 0,
     key: null,
-    login: { username: null, password: null, totp: null, fido2Credentials: null, uris: null },
+    login: { username: null, password: null, totp: null, uris: null },
     card: null,
     identity: null,
     secureNote: null,
