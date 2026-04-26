@@ -1,3 +1,6 @@
+import { config } from 'dotenv';
+config();
+
 import { webcrypto } from 'crypto';
 import http from 'http';
 import { URL } from 'url';

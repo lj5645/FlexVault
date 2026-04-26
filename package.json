@@ -61,6 +61,7 @@
     "@noble/hashes": "^2.0.1",
     "@tanstack/react-query": "^5.90.21",
     "@zip.js/zip.js": "^2.8.22",
+    "dotenv": "^16.6.1",
     "fflate": "^0.8.2",
     "lucide-preact": "^0.575.0",
     "node-cron": "^3.0.3",
