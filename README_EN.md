@@ -407,82 +407,11 @@ docker-compose -f docker-compose.selfhosted.yml logs -f
 docker-compose -f docker-compose.selfhosted.yml down
 ```
 
-#### Manual Docker Image Build
-
-```bash
-# Build image
-docker build -f Dockerfile.selfhosted -t flexvault .
-
-# Run container
-docker run -d \
-  --name flexvault \
-  -p 3000:3000 \
-  -e JWT_SECRET=your-secure-jwt-secret-at-least-32-characters-long \
-  -v flexvault-data:/app/data \
-  flexvault
-```
-
 ---
 
-### Production Deployment Recommendations
+### Production Recommendations
 
-#### 1. Use HTTPS (Strongly Recommended)
-
-**Using Nginx reverse proxy:**
-
-```nginx
-# /etc/nginx/sites-available/flexvault.conf
-server {
-    listen 80;
-    server_name your-domain.com;
-    return 301 https://$server_name$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    server_name your-domain.com;
-
-    # SSL certificate configuration (using Let's Encrypt)
-    ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
-
-    # Security configuration
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256;
-    ssl_prefer_server_ciphers off;
-
-    # Upload file size limit
-    client_max_body_size 100M;
-
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # WebSocket support
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
-}
-```
-
-**Get free Let's Encrypt certificate:**
-
-```bash
-# Install Certbot
-sudo apt install certbot python3-certbot-nginx
-
-# Get certificate
-sudo certbot --nginx -d your-domain.com
-
-# Auto-renewal
-sudo certbot renew --dry-run
-```
-
-#### 2. Use Process Manager
+#### Use Process Manager
 
 **Using PM2 (Recommended):**
 
@@ -542,7 +471,7 @@ sudo systemctl enable flexvault
 sudo systemctl status flexvault
 ```
 
-#### 3. Data Backup
+#### Data Backup
 
 ```bash
 # Manual backup
@@ -553,20 +482,6 @@ crontab -e
 
 # Backup daily at 3 AM
 0 3 * * * cd /path/to/FlexVault && tar -czvf /backup/flexvault-$(date +\%Y\%m\%d).tar.gz data/
-```
-
-#### 4. Security Hardening
-
-```bash
-# Configure firewall (only open necessary ports)
-sudo ufw allow 80/tcp
-sudo ufw allow 443/tcp
-sudo ufw allow 22/tcp
-sudo ufw enable
-
-# Regular dependency updates
-npm audit
-npm update
 ```
 
 ---
@@ -710,49 +625,6 @@ npm run build
 
 # Type check
 npm run build:selfhosted
-```
-
----
-
-## Troubleshooting
-
-### Cloudflare Workers
-
-**Problem: Deployment failed**
-- Check if `wrangler.toml` configuration is correct
-- Ensure you are logged in with `npx wrangler login`
-
-**Problem: Database initialization failed**
-- Check if D1 database binding is correct
-- View Workers logs for detailed errors
-
-### Node.js Self-hosted
-
-**Problem: `JWT_SECRET` related errors**
-- Ensure `JWT_SECRET` in `.env` file is at least 32 characters
-
-**Problem: Database initialization failed**
-- Check if `DATABASE_PATH` has write permissions
-- Ensure directory exists or can be created
-
-**Problem: Attachment upload failed**
-- Check if `STORAGE_PATH` has write permissions
-- Check if disk space is sufficient
-
-**Problem: Client connection failed**
-- Confirm server is running
-- Check firewall settings
-- Confirm client configured server URL is correct
-
-**Problem: Port already in use**
-```bash
-# Check port usage (Linux/macOS)
-lsof -i :3000
-
-# Check port usage (Windows)
-netstat -ano | findstr :3000
-
-# Change port: modify PORT value in .env
 ```
 
 ---

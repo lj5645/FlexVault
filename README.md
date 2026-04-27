@@ -6,35 +6,35 @@
   灵活的 Bitwarden 兼容密码管理服务端 - 支持 Cloudflare Workers 和 Node.js 双部署
 </p>
 
-[![Powered by Cloudflare](https://img.shields.io/badge/Powered%20by-Cloudflare-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
+[![Powered by Cloudflare](https://img.shields.io/badge/Powered%20by-Cloudflare-F38020?logo=cloudflare\&logoColor=white)](https://workers.cloudflare.com/)
 [![License: LGPL-3.0](https://img.shields.io/badge/License-LGPL--3.0-2ea44f)](./LICENSE)
 
 [提交问题](https://github.com/lj5645/FlexVault/issues/new/choose)
 
-> **免责声明**  
-> 本项目仅供学习与交流使用，请定期备份你的密码库。  
+> **免责声明**\
+> 本项目仅供学习与交流使用，请定期备份你的密码库。\
 > 本项目与 Bitwarden 官方无关，请不要向 Bitwarden 官方反馈 FlexVault 的问题。
 
----
+***
 
 ## 与 Bitwarden 官方服务端能力对比
 
-| 能力 | Bitwarden | NodeWarden | 说明 |
-|---|---|---|---|
-| 网页密码库 | ✅ | ✅ | **原创Web Vault界面** |
-| 全量同步 `/api/sync` | ✅ | ✅ | 已针对官方客户端做兼容优化 |
-| 附件上传 / 下载 | ✅ | ✅ | Cloudflare R2 / KV 或本地文件系统 |
-| Send | ✅ | ✅ | 支持文本与文件 Send |
-| 导入 / 导出 | ✅ | ✅ | 支持 Bitwarden JSON / CSV / **ZIP 导入（包括附件）** |
-| **云端备份中心** | ❌ | ✅ | **支持 WebDAV / E3 定时备份** |
-| 密码提示（网页端） | ⚠️ 有限 | ✅ | **无需发送邮件** |
-| TOTP / Steam TOTP | ✅ | ✅ | 含 `steam://` 支持 |
-| 多用户 | ✅ | ✅ | 支持邀请码注册 |
-| 组织 / 集合 / 成员权限 | ✅ | ❌ | 未实现 |
-| 登录 2FA | ✅ | ⚠️ 部分支持 | 当前仅支持用户级 TOTP |
-| SSO / SCIM / 企业目录 | ✅ | ❌ | 未实现 |
+| 能力                | Bitwarden | NodeWarden | 说明                                         |
+| ----------------- | --------- | ---------- | ------------------------------------------ |
+| 网页密码库             | ✅         | ✅          | **原创Web Vault界面**                          |
+| 全量同步 `/api/sync`  | ✅         | ✅          | 已针对官方客户端做兼容优化                              |
+| 附件上传 / 下载         | ✅         | ✅          | Cloudflare R2 / KV 或本地文件系统                 |
+| Send              | ✅         | ✅          | 支持文本与文件 Send                               |
+| 导入 / 导出           | ✅         | ✅          | 支持 Bitwarden JSON / CSV / **ZIP 导入（包括附件）** |
+| **云端备份中心**        | ❌         | ✅          | **支持 WebDAV / E3 定时备份**                    |
+| 密码提示（网页端）         | ⚠️ 有限     | ✅          | **无需发送邮件**                                 |
+| TOTP / Steam TOTP | ✅         | ✅          | 含 `steam://` 支持                            |
+| 多用户               | ✅         | ✅          | 支持邀请码注册                                    |
+| 组织 / 集合 / 成员权限    | ✅         | ❌          | 未实现                                        |
+| 登录 2FA            | ✅         | ⚠️ 部分支持    | 当前仅支持用户级 TOTP                              |
+| SSO / SCIM / 企业目录 | ✅         | ❌          | 未实现                                        |
 
----
+***
 
 ## 已测试客户端
 
@@ -44,18 +44,18 @@
 - ✅ Linux 桌面端
 - ⚠️ macOS 桌面端尚未完整验证
 
----
+***
 
 ## 部署方式
 
 FlexVault 支持两种部署方式：
 
-| 部署方式 | 适用场景 | 优势 | 劣势 |
-|---------|---------|------|------|
-| **Cloudflare Workers** | 无服务器、边缘计算 | 全球 CDN、自动扩展、免费额度充足 | 需要 Cloudflare 账号 |
-| **Node.js 自托管** | 私有服务器、内网部署 | 完全自主控制、无外部依赖 | 需要自行维护服务器 |
+| 部署方式                   | 适用场景       | 优势                 | 劣势               |
+| ---------------------- | ---------- | ------------------ | ---------------- |
+| **Cloudflare Workers** | 无服务器、边缘计算  | 全球 CDN、自动扩展、免费额度充足 | 需要 Cloudflare 账号 |
+| **Node.js 自托管**        | 私有服务器、内网部署 | 完全自主控制、无外部依赖       | 需要自行维护服务器        |
 
----
+***
 
 ## 方式一：Cloudflare Workers 部署
 
@@ -70,12 +70,13 @@ FlexVault 支持两种部署方式：
 7. 等部署完成后，打开生成的 Workers 域名
 8. 根据页面提示设置`JWT_SECRET` ，不建议临时乱填。这个值直接关系到令牌签发安全，正式环境至少使用 32 个字符以上的随机字符串。
 
-> [!TIP] 
+> \[!TIP]
 > 默认R2与可选KV的区别：
->   | 储存 | 是否需绑卡 | 单个附件/Send文件上限 | 免费额度 |
->   |---|---|---|---|
->   | R2 | 需要 | 100 MB（软限制可更改） | 10 GB |
->   | KV | 不需要 | 25 MiB（Cloudflare限制） | 1 GB |
+>
+> | 储存 | 是否需绑卡 | 单个附件/Send文件上限        | 免费额度  |
+> | -- | ----- | -------------------- | ----- |
+> | R2 | 需要    | 100 MB（软限制可更改）       | 10 GB |
+> | KV | 不需要   | 25 MiB（Cloudflare限制） | 1 GB  |
 
 ### CLI 部署
 
@@ -97,20 +98,20 @@ npm run dev
 npm run dev:kv
 ```
 
----
+***
 
 ## 方式二：Node.js 自托管部署
 
 ### 环境要求
 
-| 要求 | 说明 |
-|------|------|
-| **Node.js** | >= 18.0.0（推荐使用 LTS 版本） |
-| **操作系统** | Windows / Linux / macOS |
-| **磁盘空间** | 至少 1GB（用于数据库和附件存储） |
-| **内存** | 建议 512MB 以上 |
+| 要求          | 说明                      |
+| ----------- | ----------------------- |
+| **Node.js** | >= 18.0.0（推荐使用 LTS 版本）  |
+| **操作系统**    | Windows / Linux / macOS |
+| **磁盘空间**    | 至少 1GB（用于数据库和附件存储）      |
+| **内存**      | 建议 512MB 以上             |
 
----
+***
 
 ### 详细部署步骤
 
@@ -150,7 +151,7 @@ node --version
 npm --version
 ```
 
----
+***
 
 #### 第二步：下载项目代码
 
@@ -171,12 +172,12 @@ cd FlexVault
 
 **方式 B：直接下载 ZIP**
 
-1. 访问 https://github.com/lj5645/FlexVault
+1. 访问 <https://github.com/lj5645/FlexVault>
 2. 点击绿色按钮 `Code` → `Download ZIP`
 3. 解压下载的文件
 4. 在终端中进入解压后的目录
 
----
+***
 
 #### 第三步：安装项目依赖
 
@@ -187,7 +188,7 @@ npm install
 
 等待依赖安装完成，通常需要 1-3 分钟。
 
----
+***
 
 #### 第四步：配置环境变量
 
@@ -198,7 +199,7 @@ npm install
 cp .env.selfhosted.example .env
 ```
 
-**编辑 `.env` 文件：**
+**编辑** **`.env`** **文件：**
 
 使用任意文本编辑器打开 `.env` 文件，配置以下参数：
 
@@ -242,7 +243,7 @@ HOST=0.0.0.0
 # FRONTEND_PATH=./dist
 ```
 
-**生成安全的 JWT_SECRET：**
+**生成安全的 JWT\_SECRET：**
 
 ```bash
 # Linux/macOS
@@ -252,7 +253,7 @@ openssl rand -base64 32
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ```
 
----
+***
 
 #### 第五步：启动服务器
 
@@ -263,6 +264,7 @@ npm run dev:selfhosted
 ```
 
 开发模式特点：
+
 - 自动监听文件变化并重启
 - 显示详细调试日志
 - 适合开发和调试
@@ -279,7 +281,7 @@ npm run start:selfhosted
 NodeWarden self-hosted server running at http://0.0.0.0:3000
 ```
 
----
+***
 
 #### 第六步：验证服务运行
 
@@ -302,7 +304,7 @@ curl http://localhost:3000/api/config
 }
 ```
 
----
+***
 
 #### 第七步：配置客户端
 
@@ -316,6 +318,7 @@ curl http://localhost:3000/api/config
 6. 点击保存
 
 **支持的客户端：**
+
 - ✅ Windows 桌面端
 - ✅ macOS 桌面端
 - ✅ Linux 桌面端
@@ -323,7 +326,7 @@ curl http://localhost:3000/api/config
 - ✅ Android App
 - ✅ 浏览器扩展
 
----
+***
 
 ### Docker 部署
 
@@ -404,82 +407,11 @@ docker-compose -f docker-compose.selfhosted.yml logs -f
 docker-compose -f docker-compose.selfhosted.yml down
 ```
 
-#### 手动构建 Docker 镜像
+***
 
-```bash
-# 构建镜像
-docker build -f Dockerfile.selfhosted -t flexvault .
+### 生产环境建议
 
-# 运行容器
-docker run -d \
-  --name flexvault \
-  -p 3000:3000 \
-  -e JWT_SECRET=your-secure-jwt-secret-at-least-32-characters-long \
-  -v flexvault-data:/app/data \
-  flexvault
-```
-
----
-
-### 生产环境部署建议
-
-#### 1. 使用 HTTPS（强烈推荐）
-
-**使用 Nginx 反向代理：**
-
-```nginx
-# /etc/nginx/sites-available/flexvault.conf
-server {
-    listen 80;
-    server_name your-domain.com;
-    return 301 https://$server_name$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    server_name your-domain.com;
-
-    # SSL 证书配置（使用 Let's Encrypt）
-    ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
-
-    # 安全配置
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256;
-    ssl_prefer_server_ciphers off;
-
-    # 上传文件大小限制
-    client_max_body_size 100M;
-
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # WebSocket 支持
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
-}
-```
-
-**获取 Let's Encrypt 免费证书：**
-
-```bash
-# 安装 Certbot
-sudo apt install certbot python3-certbot-nginx
-
-# 获取证书
-sudo certbot --nginx -d your-domain.com
-
-# 自动续期
-sudo certbot renew --dry-run
-```
-
-#### 2. 使用进程管理器
+#### 使用进程管理器
 
 **使用 PM2（推荐）：**
 
@@ -539,7 +471,7 @@ sudo systemctl enable flexvault
 sudo systemctl status flexvault
 ```
 
-#### 3. 数据备份
+#### 数据备份
 
 ```bash
 # 手动备份
@@ -550,20 +482,6 @@ crontab -e
 
 # 每天凌晨 3 点备份
 0 3 * * * cd /path/to/FlexVault && tar -czvf /backup/flexvault-$(date +\%Y\%m\%d).tar.gz data/
-```
-
-#### 4. 安全加固
-
-```bash
-# 配置防火墙（仅开放必要端口）
-sudo ufw allow 80/tcp
-sudo ufw allow 443/tcp
-sudo ufw allow 22/tcp
-sudo ufw enable
-
-# 定期更新依赖
-npm audit
-npm update
 ```
 
 ---
@@ -614,17 +532,17 @@ npm update
 
 ### 功能对比
 
-| 功能 | Cloudflare Workers | Node.js 自托管 |
-|------|-------------------|---------------|
-| 数据库 | D1 (分布式 SQLite) | SQLite (libsql) |
-| 文件存储 | R2 / KV | 本地文件系统 |
-| 实时通知 | Durable Objects | WebSocket 服务器 |
-| 定时任务 | Cron Triggers | node-cron |
-| 缓存 | Cache API | 内存缓存 |
-| 扩展性 | 自动扩展 | 需手动扩展 |
-| 成本 | 免费额度内免费 | 服务器成本 |
+| 功能   | Cloudflare Workers | Node.js 自托管     |
+| ---- | ------------------ | --------------- |
+| 数据库  | D1 (分布式 SQLite)    | SQLite (libsql) |
+| 文件存储 | R2 / KV            | 本地文件系统          |
+| 实时通知 | Durable Objects    | WebSocket 服务器   |
+| 定时任务 | Cron Triggers      | node-cron       |
+| 缓存   | Cache API          | 内存缓存            |
+| 扩展性  | 自动扩展               | 需手动扩展           |
+| 成本   | 免费额度内免费            | 服务器成本           |
 
----
+***
 
 ## 云端备份说明
 
@@ -638,7 +556,7 @@ npm update
   - 缺失的附件会被安全跳过
   - 被跳过的附件不会在恢复后的数据库中留下脏记录
 
----
+***
 
 ## 导入 / 导出
 
@@ -656,7 +574,7 @@ npm update
 - 带附件的 ZIP 导出
 - 备份中心中的实例级完整手动导出
 
----
+***
 
 ## 开发
 
@@ -707,57 +625,15 @@ npm run build
 npm run build:selfhosted
 ```
 
----
-
-## 故障排除
-
-### Cloudflare Workers
-
-**问题：部署失败**
-- 检查 `wrangler.toml` 配置是否正确
-- 确保已登录 `npx wrangler login`
-
-**问题：数据库初始化失败**
-- 检查 D1 数据库绑定是否正确
-- 查看 Workers 日志获取详细错误
-
-### Node.js 自托管
-
-**问题：`JWT_SECRET` 相关错误**
-- 确保 `.env` 文件中 `JWT_SECRET` 至少 32 个字符
-
-**问题：数据库初始化失败**
-- 检查 `DATABASE_PATH` 是否有写入权限
-- 确保目录存在或可创建
-
-**问题：附件上传失败**
-- 检查 `STORAGE_PATH` 是否有写入权限
-- 检查磁盘空间是否充足
-
-**问题：客户端连接失败**
-- 确认服务器正在运行
-- 检查防火墙设置
-- 确认客户端配置的服务器 URL 正确
-
-**问题：端口被占用**
-```bash
-# 查看端口占用（Linux/macOS）
-lsof -i :3000
-
-# 查看端口占用（Windows）
-netstat -ano | findstr :3000
-
-# 更换端口：修改 .env 中的 PORT 值
-```
-
----
+***
 
 ## 开源协议
 
 LGPL-3.0 License
 
----
+***
 
 ## 致谢
 
 - [NodeWarden](https://github.com/shuaiplus/nodewarden) - 原 NodeWarden 项目，本项目基于此添加了 Node.js 自托管支持
+
