@@ -374,40 +374,7 @@ volumes:
 docker-compose up -d
 ```
 
-#### 使用 Docker Compose（从源码构建）
-
-**1. 创建配置文件：**
-
-```bash
-# 创建 .env 文件
-echo "JWT_SECRET=your-secure-jwt-secret-at-least-32-characters-long" > .env
-```
-
-**2. 启动服务：**
-
-```bash
-docker-compose -f docker-compose.selfhosted.yml up -d
-```
-
-**3. 查看运行状态：**
-
-```bash
-docker-compose -f docker-compose.selfhosted.yml ps
-```
-
-**4. 查看日志：**
-
-```bash
-docker-compose -f docker-compose.selfhosted.yml logs -f
-```
-
-**5. 停止服务：**
-
-```bash
-docker-compose -f docker-compose.selfhosted.yml down
-```
-
-***
+---
 
 ### 生产环境建议
 

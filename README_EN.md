@@ -374,39 +374,6 @@ volumes:
 docker-compose up -d
 ```
 
-#### Using Docker Compose (Build from Source)
-
-**1. Create configuration file:**
-
-```bash
-# Create .env file
-echo "JWT_SECRET=your-secure-jwt-secret-at-least-32-characters-long" > .env
-```
-
-**2. Start service:**
-
-```bash
-docker-compose -f docker-compose.selfhosted.yml up -d
-```
-
-**3. Check running status:**
-
-```bash
-docker-compose -f docker-compose.selfhosted.yml ps
-```
-
-**4. View logs:**
-
-```bash
-docker-compose -f docker-compose.selfhosted.yml logs -f
-```
-
-**5. Stop service:**
-
-```bash
-docker-compose -f docker-compose.selfhosted.yml down
-```
-
 ---
 
 ### Production Recommendations
