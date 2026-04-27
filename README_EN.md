@@ -19,35 +19,6 @@
 
 ---
 
-## Feature Comparison with Official Bitwarden Server
-
-| Capability | Bitwarden | FlexVault | Notes |
-|---|---|---|---|
-| Web Vault | ✅ | ✅ | **Original Web Vault interface** |
-| Full sync `/api/sync` | ✅ | ✅ | Compatibility optimized for official clients |
-| Attachment upload / download | ✅ | ✅ | Cloudflare R2 / KV or local file system |
-| Send | ✅ | ✅ | Supports both text and file Sends |
-| Import / Export | ✅ | ✅ | Supports Bitwarden JSON / CSV / **ZIP import with attachments** |
-| **Cloud Backup Center** | ❌ | ✅ | **Scheduled backup to WebDAV / E3** |
-| Password hint (web) | ⚠️ Limited | ✅ | **No email required** |
-| TOTP / Steam TOTP | ✅ | ✅ | Includes `steam://` support |
-| Multi-user | ✅ | ✅ | Invite-based registration |
-| Organizations / Collections / Member roles | ✅ | ❌ | Not implemented |
-| Login 2FA | ✅ | ⚠️ Partial | Currently only user-level TOTP |
-| SSO / SCIM / Enterprise directory | ✅ | ❌ | Not implemented |
-
----
-
-## Tested Clients
-
-- ✅ Windows desktop client
-- ✅ Mobile app
-- ✅ Browser extension
-- ✅ Linux desktop client
-- ⚠️ macOS desktop client has not been fully verified yet
-
----
-
 ## Deployment Methods
 
 FlexVault supports two deployment methods:
