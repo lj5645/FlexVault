@@ -1,4 +1,5 @@
 import { Env } from './types';
+import { NotificationsHub } from './durable/notifications-hub';
 import { handleRequest } from './router';
 import { StorageService } from './services/storage';
 import { applyCors, jsonResponse } from './utils/response';
@@ -72,6 +73,7 @@ export default {
 
     await ensureDatabaseInitialized(env);
     if (dbInitError) {
+      // Log full error server-side, return generic message to client.
       console.error('DB init error (not forwarded to client):', dbInitError);
       const resp = jsonResponse(
         {
@@ -103,3 +105,5 @@ export default {
     }));
   },
 };
+
+export { NotificationsHub };
