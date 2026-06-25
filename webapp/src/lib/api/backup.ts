@@ -6,7 +6,8 @@ import type {
   BackupRuntimeState,
   BackupScheduleConfig,
   BackupSettings as AdminBackupSettings,
-  E3BackupDestination,
+  S3BackupAddressingStyle,
+  S3BackupDestination,
   WebDavBackupDestination,
 } from '@shared/backup-schema';
 import {
@@ -26,7 +27,8 @@ export type {
   BackupRuntimeState,
   BackupScheduleConfig,
   AdminBackupSettings,
-  E3BackupDestination,
+  S3BackupAddressingStyle,
+  S3BackupDestination,
   WebDavBackupDestination,
 };
 
@@ -45,6 +47,11 @@ export interface BackupSettingsRepairStateResponse {
   object: 'backup-settings-repair';
   needsRepair: boolean;
   portable: BackupSettingsPortablePayload | null;
+}
+
+export interface BackupUserVerificationPayload {
+  masterPasswordHash?: string | null;
+  userVerificationToken?: string | null;
 }
 
 export interface AdminBackupRunResponse {
@@ -94,7 +101,10 @@ export interface RemoteBackupBrowserResponse {
 export interface AdminBackupImportCounts {
   config: number;
   users: number;
+  domainSettings?: number;
   userRevisions: number;
+  trustedTwoFactorDeviceTokens?: number;
+  webauthnCredentials?: number;
   folders: number;
   ciphers: number;
   attachments: number;
@@ -168,12 +178,13 @@ async function applyBackupFileIntegrityName(fileName: string, bytes: Uint8Array)
 
 export async function exportAdminBackup(
   authedFetch: AuthedFetch,
+  masterPasswordHash: string,
   includeAttachments: boolean = false
 ): Promise<AdminBackupExportPayload> {
   const resp = await authedFetch('/api/admin/backup/export', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ includeAttachments }),
+    body: JSON.stringify({ includeAttachments, masterPasswordHash }),
   });
   if (!resp.ok) throw new Error(await parseErrorMessage(resp, t('txt_backup_export_failed')));
 
@@ -196,10 +207,11 @@ export async function downloadAdminBackupAttachmentBlob(
 
 export async function buildCompleteAdminBackupExport(
   authedFetch: AuthedFetch,
+  masterPasswordHash: string,
   includeAttachments: boolean = false,
   onProgress?: (event: BackupExportClientProgressEvent) => void | Promise<void>
 ): Promise<AdminBackupExportPayload> {
-  const payload = await exportAdminBackup(authedFetch, includeAttachments);
+  const payload = await exportAdminBackup(authedFetch, masterPasswordHash, includeAttachments);
   if (!includeAttachments) {
     await onProgress?.({
       operation: 'backup-export',
@@ -273,12 +285,13 @@ export async function getAdminBackupSettings(authedFetch: AuthedFetch): Promise<
 
 export async function saveAdminBackupSettings(
   authedFetch: AuthedFetch,
+  masterPasswordHash: string,
   settings: AdminBackupSettings
 ): Promise<AdminBackupSettings> {
   const resp = await authedFetch('/api/admin/backup/settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(settings),
+    body: JSON.stringify({ ...settings, masterPasswordHash }),
   });
   if (!resp.ok) throw new Error(await parseErrorMessage(resp, t('txt_backup_settings_save_failed')));
   const body = await parseJson<AdminBackupSettings>(resp);
@@ -300,12 +313,13 @@ export async function getAdminBackupSettingsRepairState(
 
 export async function repairAdminBackupSettings(
   authedFetch: AuthedFetch,
+  verification: BackupUserVerificationPayload,
   settings: AdminBackupSettings
 ): Promise<AdminBackupSettings> {
   const resp = await authedFetch('/api/admin/backup/settings/repair', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(settings),
+    body: JSON.stringify({ ...settings, ...verification }),
   });
   if (!resp.ok) throw new Error(await parseErrorMessage(resp, t('txt_backup_settings_save_failed')));
   const body = await parseJson<AdminBackupSettings>(resp);
@@ -315,12 +329,13 @@ export async function repairAdminBackupSettings(
 
 export async function runAdminBackupNow(
   authedFetch: AuthedFetch,
+  masterPasswordHash: string,
   destinationId?: string | null
 ): Promise<AdminBackupRunResponse> {
   const resp = await authedFetch('/api/admin/backup/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(destinationId ? { destinationId } : {}),
+    body: JSON.stringify(destinationId ? { destinationId, masterPasswordHash } : { masterPasswordHash }),
   });
   if (!resp.ok) throw new Error(await parseErrorMessage(resp, t('txt_backup_remote_run_failed')));
   const body = await parseJson<AdminBackupRunResponse>(resp);
@@ -346,14 +361,16 @@ export async function listRemoteBackups(
 
 export async function downloadRemoteBackup(
   authedFetch: AuthedFetch,
+  masterPasswordHash: string,
   destinationId: string,
   path: string,
   onProgress?: (percent: number | null) => void
 ): Promise<AdminBackupExportPayload> {
-  const params = new URLSearchParams();
-  params.set('destinationId', destinationId);
-  params.set('path', path);
-  const resp = await authedFetch(`/api/admin/backup/remote/download?${params.toString()}`, { method: 'GET' });
+  const resp = await authedFetch('/api/admin/backup/remote/download', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ destinationId, path, masterPasswordHash }),
+  });
   if (!resp.ok) throw new Error(await parseErrorMessage(resp, t('txt_backup_remote_download_failed')));
   const mimeType = String(resp.headers.get('Content-Type') || 'application/zip').trim() || 'application/zip';
   const fileName = parseContentDispositionFileName(resp, 'nodewarden_remote_backup.zip');
@@ -413,6 +430,7 @@ export async function inspectRemoteBackupIntegrity(
 
 export async function restoreRemoteBackup(
   authedFetch: AuthedFetch,
+  masterPasswordHash: string,
   destinationId: string,
   path: string,
   replaceExisting: boolean = false,
@@ -421,7 +439,7 @@ export async function restoreRemoteBackup(
   const resp = await authedFetch('/api/admin/backup/remote/restore', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ destinationId, path, replaceExisting, allowChecksumMismatch }),
+    body: JSON.stringify({ destinationId, path, replaceExisting, allowChecksumMismatch, masterPasswordHash }),
   });
   if (!resp.ok) throw new Error(await parseErrorMessage(resp, t('txt_backup_remote_restore_failed')));
   const body = await parseJson<AdminBackupImportResponse>(resp);
@@ -431,12 +449,14 @@ export async function restoreRemoteBackup(
 
 export async function importAdminBackup(
   authedFetch: AuthedFetch,
+  masterPasswordHash: string,
   file: File,
   replaceExisting: boolean = false,
   allowChecksumMismatch: boolean = false
 ): Promise<AdminBackupImportResponse> {
   const formData = new FormData();
   formData.set('file', file, file.name || 'nodewarden_backup.zip');
+  formData.set('masterPasswordHash', masterPasswordHash);
   if (replaceExisting) {
     formData.set('replaceExisting', '1');
   }

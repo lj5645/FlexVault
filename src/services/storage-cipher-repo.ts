@@ -27,6 +27,47 @@ interface CipherRow {
   deleted_at: string | null;
 }
 
+const CIPHER_SCALAR_DATA_KEYS = new Set([
+  'id',
+  'userId',
+  'user_id',
+  'type',
+  'folderId',
+  'folder_id',
+  'name',
+  'notes',
+  'favorite',
+  'reprompt',
+  'key',
+  'attachments',
+  'Attachments',
+  'attachments2',
+  'Attachments2',
+  'createdAt',
+  'created_at',
+  'creationDate',
+  'updatedAt',
+  'updated_at',
+  'revisionDate',
+  'archivedAt',
+  'archived_at',
+  'archivedDate',
+  'deletedAt',
+  'deleted_at',
+  'deletedDate',
+]);
+
+function buildCipherData(cipher: Cipher, folderId: string | null): string {
+  const payload: Record<string, unknown> = {
+    ...cipher,
+    folderId,
+  };
+  for (const key of CIPHER_SCALAR_DATA_KEYS) {
+    delete payload[key];
+  }
+  return JSON.stringify(payload);
+}
+
 function parseCipherRow(row: CipherRow | null | undefined): Cipher | null {
   if (!row?.data) return null;
   try {
@@ -46,7 +87,7 @@ function parseCipherRow(row: CipherRow | null | undefined): Cipher | null {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       archivedAt: row.archived_at ?? parsed.archivedAt ?? parsed.archivedDate ?? null,
-      deletedAt: row.deleted_at ?? null,
+      deletedAt: row.deleted_at ?? parsed.deletedAt ?? parsed.deletedDate ?? null,
     };
   } catch {
     console.error('Corrupted cipher data, id:', row.id);
@@ -68,10 +109,7 @@ export async function getCipher(db: D1Database, id: string): Promise<Cipher | nu
 
 export async function saveCipher(db: D1Database, safeBind: SafeBind, cipher: Cipher): Promise<void> {
   const folderId = normalizeOptionalId(cipher.folderId);
-  const data = JSON.stringify({
-    ...cipher,
-    folderId,
-  });
+  const data = buildCipherData(cipher, folderId);
   const stmt = db.prepare(
     'INSERT INTO ciphers(id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at) ' +
     'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
@@ -117,8 +155,7 @@ export async function bulkSoftDeleteCiphers(
   if (!uniqueIds.length) return null;
 
   const now = new Date().toISOString();
-  const patch = JSON.stringify({ deletedAt: now, updatedAt: now });
-  const chunkSize = sqlChunkSize(4);
+  const chunkSize = sqlChunkSize(3);
 
   for (let i = 0; i < uniqueIds.length; i += chunkSize) {
     const chunk = uniqueIds.slice(i, i + chunkSize);
@@ -126,10 +163,11 @@ export async function bulkSoftDeleteCiphers(
     await db
       .prepare(
         `UPDATE ciphers
-         SET deleted_at = ?, updated_at = ?, data = json_patch(data, ?)
+         SET deleted_at = ?, updated_at = ?,
+             data = json_remove(data, '$.deletedAt', '$.deletedDate', '$.updatedAt', '$.revisionDate')
          WHERE user_id = ? AND id IN (${placeholders})`
       )
-      .bind(now, now, patch, userId, ...chunk)
+      .bind(now, now, userId, ...chunk)
       .run();
   }
 
@@ -148,8 +186,7 @@ export async function bulkRestoreCiphers(
   if (!uniqueIds.length) return null;
 
   const now = new Date().toISOString();
-  const patch = JSON.stringify({ deletedAt: null, updatedAt: now });
-  const chunkSize = sqlChunkSize(3);
+  const chunkSize = sqlChunkSize(2);
 
   for (let i = 0; i < uniqueIds.length; i += chunkSize) {
     const chunk = uniqueIds.slice(i, i + chunkSize);
@@ -157,10 +194,11 @@ export async function bulkRestoreCiphers(
     await db
       .prepare(
         `UPDATE ciphers
-         SET deleted_at = NULL, updated_at = ?, data = json_patch(data, ?)
+         SET deleted_at = NULL, updated_at = ?,
+             data = json_remove(data, '$.deletedAt', '$.deletedDate', '$.updatedAt', '$.revisionDate')
          WHERE user_id = ? AND id IN (${placeholders})`
       )
-      .bind(now, patch, userId, ...chunk)
+      .bind(now, userId, ...chunk)
       .run();
   }
 
@@ -206,7 +244,9 @@ export async function getCiphersPage(
   limit: number,
   offset: number
 ): Promise<Cipher[]> {
-  const whereDeleted = includeDeleted ? '' : 'AND deleted_at IS NULL';
+  const whereDeleted = includeDeleted
+    ? ''
+    : "AND deleted_at IS NULL AND json_extract(data, '$.deletedAt') IS NULL AND json_extract(data, '$.deletedDate') IS NULL";
   const res = await db
     .prepare(
       `SELECT ${selectCipherColumns()} FROM ciphers
@@ -262,8 +302,7 @@ export async function bulkMoveCiphers(
   const now = new Date().toISOString();
   const normalizedFolderId = normalizeOptionalId(folderId);
   const uniqueIds = sanitizeIds(ids);
-  const patch = JSON.stringify({ folderId: normalizedFolderId, updatedAt: now });
-  const chunkSize = sqlChunkSize(4);
+  const chunkSize = sqlChunkSize(3);
 
   for (let i = 0; i < uniqueIds.length; i += chunkSize) {
     const chunk = uniqueIds.slice(i, i + chunkSize);
@@ -271,10 +310,11 @@ export async function bulkMoveCiphers(
     await db
       .prepare(
         `UPDATE ciphers
-         SET folder_id = ?, updated_at = ?, data = json_patch(data, ?)
+         SET folder_id = ?, updated_at = ?,
+             data = json_remove(data, '$.folderId', '$.folder_id', '$.updatedAt', '$.revisionDate')
          WHERE user_id = ? AND id IN (${placeholders})`
       )
-      .bind(normalizedFolderId, now, patch, userId, ...chunk)
+      .bind(normalizedFolderId, now, userId, ...chunk)
       .run();
   }
 
@@ -293,8 +333,7 @@ export async function bulkArchiveCiphers(
   if (!uniqueIds.length) return null;
 
   const now = new Date().toISOString();
-  const patch = JSON.stringify({ archivedAt: now, archivedDate: now, updatedAt: now });
-  const chunkSize = sqlChunkSize(4);
+  const chunkSize = sqlChunkSize(3);
 
   for (let i = 0; i < uniqueIds.length; i += chunkSize) {
     const chunk = uniqueIds.slice(i, i + chunkSize);
@@ -302,10 +341,14 @@ export async function bulkArchiveCiphers(
     await db
       .prepare(
         `UPDATE ciphers
-         SET archived_at = ?, updated_at = ?, data = json_patch(data, ?)
-         WHERE user_id = ? AND id IN (${placeholders}) AND deleted_at IS NULL`
+         SET archived_at = ?, updated_at = ?,
+             data = json_remove(data, '$.archivedAt', '$.archivedDate', '$.updatedAt', '$.revisionDate')
+         WHERE user_id = ? AND id IN (${placeholders})
+           AND deleted_at IS NULL
+           AND json_extract(data, '$.deletedAt') IS NULL
+           AND json_extract(data, '$.deletedDate') IS NULL`
       )
-      .bind(now, now, patch, userId, ...chunk)
+      .bind(now, now, userId, ...chunk)
       .run();
   }
 
@@ -324,8 +367,7 @@ export async function bulkUnarchiveCiphers(
   if (!uniqueIds.length) return null;
 
   const now = new Date().toISOString();
-  const patch = JSON.stringify({ archivedAt: null, archivedDate: null, updatedAt: now });
-  const chunkSize = sqlChunkSize(3);
+  const chunkSize = sqlChunkSize(2);
 
   for (let i = 0; i < uniqueIds.length; i += chunkSize) {
     const chunk = uniqueIds.slice(i, i + chunkSize);
@@ -333,10 +375,11 @@ export async function bulkUnarchiveCiphers(
     await db
       .prepare(
         `UPDATE ciphers
-         SET archived_at = NULL, updated_at = ?, data = json_patch(data, ?)
+         SET archived_at = NULL, updated_at = ?,
+             data = json_remove(data, '$.archivedAt', '$.archivedDate', '$.updatedAt', '$.revisionDate')
          WHERE user_id = ? AND id IN (${placeholders})`
       )
-      .bind(now, patch, userId, ...chunk)
+      .bind(now, userId, ...chunk)
       .run();
   }
 

@@ -1,6 +1,6 @@
 import ConfirmDialog from '@/components/ConfirmDialog';
 import type { CustomFieldType, Folder } from '@/lib/types';
-import { FIELD_TYPE_OPTIONS, toBooleanFieldValue } from '@/components/vault/vault-page-helpers';
+import { getFieldTypeOptions, toBooleanFieldValue } from '@/components/vault/vault-page-helpers';
 import { t } from '@/lib/i18n';
 
 interface VaultDialogsProps {
@@ -61,6 +61,7 @@ interface VaultDialogsProps {
 }
 
 export default function VaultDialogs(props: VaultDialogsProps) {
+  const fieldTypeOptions = getFieldTypeOptions();
   return (
     <>
       <ConfirmDialog
@@ -75,7 +76,7 @@ export default function VaultDialogs(props: VaultDialogsProps) {
         <label className="field">
           <span>{t('txt_field_type')}</span>
           <select className="input" value={props.fieldType} onInput={(e) => props.onFieldTypeChange(Number((e.currentTarget as HTMLSelectElement).value) as CustomFieldType)}>
-            {FIELD_TYPE_OPTIONS.map((option) => (
+            {fieldTypeOptions.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>
@@ -98,7 +99,11 @@ export default function VaultDialogs(props: VaultDialogsProps) {
         ) : (
           <label className="field">
             <span>{t('txt_field_value')}</span>
-            <input className="input" value={props.fieldValue} onInput={(e) => props.onFieldValueChange((e.currentTarget as HTMLInputElement).value)} />
+            <textarea
+              className="input textarea custom-field-textarea"
+              value={props.fieldValue}
+              onInput={(e) => props.onFieldValueChange((e.currentTarget as HTMLTextAreaElement).value)}
+            />
           </label>
         )}
       </ConfirmDialog>

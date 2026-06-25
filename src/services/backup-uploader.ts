@@ -1,7 +1,7 @@
 import {
   BackupDestinationRecord,
   BackupDestinationType,
-  E3BackupDestination,
+  S3BackupDestination,
   WebDavBackupDestination,
 } from './backup-config';
 
@@ -213,13 +213,13 @@ function ensureDestinationConfigReady(destination: BackupDestinationRecord): voi
     if (!String(config.password || '')) throw new Error('WebDAV password is required');
     return;
   }
-  if (destination.type === 'e3') {
-    const config = destination.destination as E3BackupDestination;
-    if (!String(config.endpoint || '').trim()) throw new Error('E3 endpoint is required');
-    if (!/^https?:\/\//i.test(String(config.endpoint || '').trim())) throw new Error('E3 endpoint must start with http:// or https://');
-    if (!String(config.bucket || '').trim()) throw new Error('E3 bucket is required');
-    if (!String(config.accessKeyId || '').trim()) throw new Error('E3 access key is required');
-    if (!String(config.secretAccessKey || '')) throw new Error('E3 secret key is required');
+  if (destination.type === 's3') {
+    const config = destination.destination as S3BackupDestination;
+    if (!String(config.endpoint || '').trim()) throw new Error('S3 endpoint is required');
+    if (!/^https?:\/\//i.test(String(config.endpoint || '').trim())) throw new Error('S3 endpoint must start with http:// or https://');
+    if (!String(config.bucket || '').trim()) throw new Error('S3 bucket is required');
+    if (!String(config.accessKeyId || '').trim()) throw new Error('S3 access key is required');
+    if (!String(config.secretAccessKey || '')) throw new Error('S3 secret key is required');
   }
 }
 
@@ -448,16 +448,35 @@ async function existsInWebDav(config: WebDavBackupDestination, relativePath: str
   return true;
 }
 
-function e3BucketBaseUrl(config: E3BackupDestination): URL {
-  return new URL(`${config.endpoint.replace(/\/+$/, '')}/${encodeURIComponent(config.bucket)}`);
+function isBucketHostedS3Endpoint(endpoint: URL, bucket: string): boolean {
+  const hostname = endpoint.hostname.toLowerCase();
+  const bucketName = bucket.trim().toLowerCase();
+  return !!bucketName && (hostname === bucketName || hostname.startsWith(`${bucketName}.`));
 }
 
-function normalizeE3ObjectKey(config: E3BackupDestination, relativePath: string): string {
+function s3BucketBaseUrl(config: S3BackupDestination): URL {
+  const endpoint = new URL(config.endpoint.replace(/\/+$/, ''));
+  const bucket = config.bucket.trim();
+
+  if (config.addressingStyle === 'virtual-hosted-style') {
+    if (isBucketHostedS3Endpoint(endpoint, bucket)) return endpoint;
+    endpoint.hostname = `${bucket}.${endpoint.hostname}`;
+    return endpoint;
+  }
+
+  return new URL(`${endpoint.toString().replace(/\/+$/, '')}/${encodeURIComponent(bucket)}`);
+}
+
+function s3ObjectUrl(config: S3BackupDestination, objectKey: string): URL {
+  return new URL(`${s3BucketBaseUrl(config).toString().replace(/\/+$/, '')}/${encodePathSegments(objectKey)}`);
+}
+
+function normalizeS3ObjectKey(config: S3BackupDestination, relativePath: string): string {
   return buildJoinedPath(config.rootPath, normalizeRelativePath(relativePath));
 }
 
-async function signedE3Request(
-  config: E3BackupDestination,
+async function signedS3Request(
+  config: S3BackupDestination,
   method: 'GET' | 'PUT' | 'DELETE' | 'HEAD',
   url: URL,
   body?: Uint8Array,
@@ -494,41 +513,41 @@ async function signedE3Request(
   });
 }
 
-async function putToE3(
-  config: E3BackupDestination,
+async function putToS3(
+  config: S3BackupDestination,
   relativePath: string,
   bytes: Uint8Array,
   options: RemoteBackupFilePutOptions = {}
 ): Promise<void> {
-  const objectKey = normalizeE3ObjectKey(config, relativePath);
-  const url = new URL(`${e3BucketBaseUrl(config).toString()}/${encodePathSegments(objectKey)}`);
-  const response = await signedE3Request(config, 'PUT', url, bytes, options.contentType);
+  const objectKey = normalizeS3ObjectKey(config, relativePath);
+  const url = s3ObjectUrl(config, objectKey);
+  const response = await signedS3Request(config, 'PUT', url, bytes, options.contentType);
 
   if (!response.ok) {
-    throw new Error(`E3 upload failed: ${response.status}`);
+    throw new Error(`S3 upload failed: ${response.status}`);
   }
 }
 
-async function uploadToE3(config: E3BackupDestination, archive: Uint8Array, fileName: string): Promise<BackupUploadResult> {
-  await putToE3(config, fileName, archive, { contentType: 'application/zip' });
+async function uploadToS3(config: S3BackupDestination, archive: Uint8Array, fileName: string): Promise<BackupUploadResult> {
+  await putToS3(config, fileName, archive, { contentType: 'application/zip' });
   return {
-    provider: 'e3',
-    remotePath: normalizeE3ObjectKey(config, fileName),
+    provider: 's3',
+    remotePath: normalizeS3ObjectKey(config, fileName),
   };
 }
 
-async function listE3Entries(config: E3BackupDestination, relativePath: string): Promise<RemoteBackupListResult> {
+async function listS3Entries(config: S3BackupDestination, relativePath: string): Promise<RemoteBackupListResult> {
   const currentPath = normalizeRelativePath(relativePath);
-  const targetPrefixBase = normalizeE3ObjectKey(config, currentPath);
+  const targetPrefixBase = normalizeS3ObjectKey(config, currentPath);
   const targetPrefix = trimSlashes(targetPrefixBase) ? `${trimSlashes(targetPrefixBase)}/` : '';
-  const url = e3BucketBaseUrl(config);
+  const url = s3BucketBaseUrl(config);
   url.searchParams.set('list-type', '2');
   url.searchParams.set('delimiter', '/');
   if (targetPrefix) url.searchParams.set('prefix', targetPrefix);
 
-  const response = await signedE3Request(config, 'GET', url);
+  const response = await signedS3Request(config, 'GET', url);
   if (!response.ok) {
-    throw new Error(`E3 listing failed: ${response.status}`);
+    throw new Error(`S3 listing failed: ${response.status}`);
   }
 
   const xml = await response.text();
@@ -581,26 +600,26 @@ async function listE3Entries(config: E3BackupDestination, relativePath: string):
   for (const item of items) deduped.set(`${item.isDirectory ? 'd' : 'f'}:${item.path}`, item);
 
   return {
-    provider: 'e3',
+    provider: 's3',
     currentPath,
     parentPath: parentPath(currentPath),
     items: sortRemoteItems(Array.from(deduped.values())),
   };
 }
 
-async function downloadFromE3(config: E3BackupDestination, relativePath: string): Promise<RemoteBackupFile> {
+async function downloadFromS3(config: S3BackupDestination, relativePath: string): Promise<RemoteBackupFile> {
   const normalized = normalizeRelativePath(relativePath);
   if (!normalized || normalized.endsWith('/')) {
     throw new Error('Please select a backup file');
   }
-  const objectKey = normalizeE3ObjectKey(config, normalized);
-  const url = new URL(`${e3BucketBaseUrl(config).toString()}/${encodePathSegments(objectKey)}`);
-  const response = await signedE3Request(config, 'GET', url);
+  const objectKey = normalizeS3ObjectKey(config, normalized);
+  const url = s3ObjectUrl(config, objectKey);
+  const response = await signedS3Request(config, 'GET', url);
   if (!response.ok) {
-    throw new Error(`E3 download failed: ${response.status}`);
+    throw new Error(`S3 download failed: ${response.status}`);
   }
   return {
-    provider: 'e3',
+    provider: 's3',
     remotePath: normalized,
     fileName: basename(normalized) || 'backup.zip',
     contentType: String(response.headers.get('Content-Type') || 'application/zip').trim() || 'application/zip',
@@ -608,35 +627,35 @@ async function downloadFromE3(config: E3BackupDestination, relativePath: string)
   };
 }
 
-async function deleteFromE3(config: E3BackupDestination, relativePath: string): Promise<void> {
-  const objectKey = normalizeE3ObjectKey(config, relativePath);
-  const url = new URL(`${e3BucketBaseUrl(config).toString()}/${encodePathSegments(objectKey)}`);
-  const response = await signedE3Request(config, 'DELETE', url);
+async function deleteFromS3(config: S3BackupDestination, relativePath: string): Promise<void> {
+  const objectKey = normalizeS3ObjectKey(config, relativePath);
+  const url = s3ObjectUrl(config, objectKey);
+  const response = await signedS3Request(config, 'DELETE', url);
   if (!response.ok && response.status !== 404) {
-    throw new Error(`E3 delete failed: ${response.status}`);
+    throw new Error(`S3 delete failed: ${response.status}`);
   }
 }
 
-async function existsInE3(config: E3BackupDestination, relativePath: string): Promise<boolean> {
-  const objectKey = normalizeE3ObjectKey(config, relativePath);
-  const url = new URL(`${e3BucketBaseUrl(config).toString()}/${encodePathSegments(objectKey)}`);
-  const response = await signedE3Request(config, 'HEAD', url);
+async function existsInS3(config: S3BackupDestination, relativePath: string): Promise<boolean> {
+  const objectKey = normalizeS3ObjectKey(config, relativePath);
+  const url = s3ObjectUrl(config, objectKey);
+  const response = await signedS3Request(config, 'HEAD', url);
   if (response.status === 404) return false;
   if (!response.ok) {
-    throw new Error(`E3 existence check failed: ${response.status}`);
+    throw new Error(`S3 existence check failed: ${response.status}`);
   }
   return true;
 }
 
 interface ConfiguredDestinationAdapter {
-  provider: 'webdav' | 'e3';
-  config: WebDavBackupDestination | E3BackupDestination;
-  upload: (config: WebDavBackupDestination | E3BackupDestination, archive: Uint8Array, fileName: string) => Promise<BackupUploadResult>;
-  putFile: (config: WebDavBackupDestination | E3BackupDestination, relativePath: string, bytes: Uint8Array, options?: RemoteBackupFilePutOptions) => Promise<void>;
-  list: (config: WebDavBackupDestination | E3BackupDestination, relativePath: string) => Promise<RemoteBackupListResult>;
-  download: (config: WebDavBackupDestination | E3BackupDestination, relativePath: string) => Promise<RemoteBackupFile>;
-  deleteFile: (config: WebDavBackupDestination | E3BackupDestination, relativePath: string) => Promise<void>;
-  exists: (config: WebDavBackupDestination | E3BackupDestination, relativePath: string) => Promise<boolean>;
+  provider: 'webdav' | 's3';
+  config: WebDavBackupDestination | S3BackupDestination;
+  upload: (config: WebDavBackupDestination | S3BackupDestination, archive: Uint8Array, fileName: string) => Promise<BackupUploadResult>;
+  putFile: (config: WebDavBackupDestination | S3BackupDestination, relativePath: string, bytes: Uint8Array, options?: RemoteBackupFilePutOptions) => Promise<void>;
+  list: (config: WebDavBackupDestination | S3BackupDestination, relativePath: string) => Promise<RemoteBackupListResult>;
+  download: (config: WebDavBackupDestination | S3BackupDestination, relativePath: string) => Promise<RemoteBackupFile>;
+  deleteFile: (config: WebDavBackupDestination | S3BackupDestination, relativePath: string) => Promise<void>;
+  exists: (config: WebDavBackupDestination | S3BackupDestination, relativePath: string) => Promise<boolean>;
 }
 
 export interface RemoteBackupTransferSession {
@@ -666,16 +685,16 @@ function resolveConfiguredDestinationAdapter(
       exists: (config, relativePath) => existsInWebDav(config as WebDavBackupDestination, relativePath),
     };
   }
-  if (destination.type === 'e3') {
+  if (destination.type === 's3') {
     return {
-      provider: 'e3',
-      config: destination.destination as E3BackupDestination,
-      upload: (config, archive, fileName) => uploadToE3(config as E3BackupDestination, archive, fileName),
-      putFile: (config, relativePath, bytes, options) => putToE3(config as E3BackupDestination, relativePath, bytes, options),
-      list: (config, relativePath) => listE3Entries(config as E3BackupDestination, relativePath),
-      download: (config, relativePath) => downloadFromE3(config as E3BackupDestination, relativePath),
-      deleteFile: (config, relativePath) => deleteFromE3(config as E3BackupDestination, relativePath),
-      exists: (config, relativePath) => existsInE3(config as E3BackupDestination, relativePath),
+      provider: 's3',
+      config: destination.destination as S3BackupDestination,
+      upload: (config, archive, fileName) => uploadToS3(config as S3BackupDestination, archive, fileName),
+      putFile: (config, relativePath, bytes, options) => putToS3(config as S3BackupDestination, relativePath, bytes, options),
+      list: (config, relativePath) => listS3Entries(config as S3BackupDestination, relativePath),
+      download: (config, relativePath) => downloadFromS3(config as S3BackupDestination, relativePath),
+      deleteFile: (config, relativePath) => deleteFromS3(config as S3BackupDestination, relativePath),
+      exists: (config, relativePath) => existsInS3(config as S3BackupDestination, relativePath),
     };
   }
 
@@ -703,7 +722,7 @@ export function createRemoteBackupTransferSession(destination: BackupDestination
         provider: adapter.provider,
         remotePath: adapter.provider === 'webdav'
           ? buildJoinedPath((adapter.config as WebDavBackupDestination).remotePath, fileName)
-          : normalizeE3ObjectKey(adapter.config as E3BackupDestination, fileName),
+          : normalizeS3ObjectKey(adapter.config as S3BackupDestination, fileName),
       };
     },
     putFile,

@@ -83,6 +83,7 @@ export default function ConfirmDialog(props: ConfirmDialogProps) {
   const [present, setPresent] = useState(props.open);
   const [closing, setClosing] = useState(false);
   const cardRef = useRef<HTMLFormElement | null>(null);
+  const maskPointerStartedRef = useRef(false);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   const dialogId = useMemo(() => `confirm-dialog-${++dialogIdCounter}`, []);
   const titleId = `${dialogId}-title`;
@@ -176,8 +177,11 @@ export default function ConfirmDialog(props: ConfirmDialogProps) {
   return createPortal((
     <div
       className={`dialog-mask ${props.variant === 'warning' ? 'warning' : ''} ${props.open && !closing ? 'open' : ''} ${closing ? 'closing' : ''}`}
+      onPointerDown={(event) => {
+        maskPointerStartedRef.current = event.target === event.currentTarget;
+      }}
       onClick={(event) => {
-        if (event.target !== event.currentTarget || !canDismiss) return;
+        if (event.target !== event.currentTarget || !maskPointerStartedRef.current || !canDismiss) return;
         props.onCancel();
       }}
     >

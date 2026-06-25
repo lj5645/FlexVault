@@ -1,33 +1,40 @@
-import type { JSX, RefObject } from 'preact';
+import type { ComponentChildren, RefObject } from 'preact';
+import { useEffect, useRef, useState } from 'preact/hooks';
+import { memo } from 'preact/compat';
 import { createPortal } from 'preact/compat';
-import { useState } from 'preact/hooks';
-import { Archive, ArrowUpDown, Check, CheckCheck, FolderInput, GripVertical, Plus, RefreshCw, RotateCcw, Trash2, X } from 'lucide-preact';
 import {
-  closestCenter,
-  DndContext,
-  DragOverlay,
-  type DragEndEvent,
-  type DragStartEvent,
-  PointerSensor,
-  TouchSensor,
-  useSensor,
-  useSensors,
-} from '@dnd-kit/core';
-import {
-  defaultAnimateLayoutChanges,
-  type AnimateLayoutChanges,
-  SortableContext,
-  useSortable,
-  verticalListSortingStrategy,
-} from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
-import type { Cipher } from '@/lib/types';
+  Archive,
+  ArrowUpDown,
+  Check,
+  CheckCheck,
+  ChevronDown,
+  Copy,
+  CreditCard,
+  Folder as FolderIcon,
+  FolderInput,
+  FolderX,
+  Globe,
+  KeyRound,
+  LayoutGrid,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  ShieldUser,
+  Star,
+  StickyNote,
+  Trash2,
+  X,
+} from 'lucide-preact';
+import LoadingState from '@/components/LoadingState';
+import type { Cipher, Folder } from '@/lib/types';
 import { t } from '@/lib/i18n';
 import {
-  CREATE_TYPE_OPTIONS,
   CreateTypeIcon,
-  VAULT_SORT_OPTIONS,
+  getCreateTypeOptions,
+  getDuplicateDetectionOptions,
+  getVaultSortOptions,
   VaultListIcon,
+  type DuplicateDetectionMode,
   type SidebarFilter,
   type VaultSortMode,
 } from '@/components/vault/vault-page-helpers';
@@ -42,20 +49,23 @@ interface VirtualRange {
 interface VaultListPanelProps {
   busy: boolean;
   loading: boolean;
+  error: string;
+  folders: Folder[];
   searchInput: string;
   sortMode: VaultSortMode;
   sortMenuOpen: boolean;
+  duplicateMode: DuplicateDetectionMode;
   selectedCount: number;
   totalCipherCount: number;
   filteredCiphers: Cipher[];
   visibleCiphers: Cipher[];
+  duplicateGroupIndexById: Map<string, number>;
   virtualRange: VirtualRange;
   selectedCipherId: string;
   selectedMap: Record<string, boolean>;
   sidebarFilter: SidebarFilter;
   isMobileLayout: boolean;
   mobileFabVisible: boolean;
-  canReorder: boolean;
   createMenuOpen: boolean;
   createMenuRef: RefObject<HTMLDivElement>;
   sortMenuRef: RefObject<HTMLDivElement>;
@@ -66,6 +76,8 @@ interface VaultListPanelProps {
   onSearchCompositionEnd: (value: string) => void;
   onToggleSortMenu: () => void;
   onSelectSortMode: (value: VaultSortMode) => void;
+  onDuplicateModeChange: (value: DuplicateDetectionMode) => void;
+  onChangeFilter: (filter: SidebarFilter) => void;
   onSyncVault: () => void;
   onOpenBulkDelete: () => void;
   onSelectDuplicates: () => void;
@@ -77,48 +89,53 @@ interface VaultListPanelProps {
   onBulkUnarchive: () => void;
   onOpenMove: () => void;
   onClearSelection: () => void;
-  onReorderCipher: (activeId: string, overId: string) => void;
   onScroll: (top: number) => void;
   onToggleSelected: (cipherId: string, checked: boolean) => void;
   onSelectCipher: (cipherId: string) => void;
   listSubtitle: (cipher: Cipher) => string;
 }
 
-interface SortableCipherListItemProps {
+interface CipherListItemProps {
   cipher: Cipher;
   selected: boolean;
   checked: boolean;
-  canReorder: boolean;
+  duplicateGroupIndex: number | null;
   subtitle: string;
   onToggleSelected: (cipherId: string, checked: boolean) => void;
   onSelectCipher: (cipherId: string) => void;
 }
 
-interface CipherListItemBodyProps {
-  cipher: Cipher;
-  checked: boolean;
-  canReorder: boolean;
-  subtitle: string;
-  dragButtonRef?: (element: HTMLButtonElement | null) => void;
-  dragButtonAttributes?: JSX.HTMLAttributes<HTMLButtonElement>;
-  dragButtonListeners?: Record<string, unknown>;
-  onToggleSelected?: (cipherId: string, checked: boolean) => void;
-  onSelectCipher?: (cipherId: string) => void;
+type MobileFilterMenuKey = 'duplicate' | 'menu' | 'type' | 'folder';
+
+interface MobileFilterOption {
+  value: string;
+  label: string;
+  icon: ComponentChildren;
+  active: boolean;
+  onSelect: () => void;
 }
 
-function CipherListItemBody(props: CipherListItemBodyProps) {
+const CipherListItem = memo(function CipherListItem(props: CipherListItemProps) {
+  const duplicateGroupHue = props.duplicateGroupIndex === null ? null : (props.duplicateGroupIndex * 137.508) % 360;
   return (
-    <>
+    <div
+      className={`list-item ${props.selected ? 'active' : ''} ${duplicateGroupHue === null ? '' : 'duplicate-group-item'}`}
+      style={duplicateGroupHue === null ? undefined : { '--duplicate-group-hue': `${duplicateGroupHue}deg` }}
+      onClick={(event) => {
+        const target = event.target as HTMLElement;
+        if (target.closest('.row-check')) return;
+        props.onSelectCipher(props.cipher.id);
+      }}
+    >
       <input
         type="checkbox"
         className="row-check"
         checked={props.checked}
-        disabled={!props.onToggleSelected}
         onClick={(event) => event.stopPropagation()}
-        onInput={(e) => props.onToggleSelected?.(props.cipher.id, (e.currentTarget as HTMLInputElement).checked)}
+        onInput={(e) => props.onToggleSelected(props.cipher.id, (e.currentTarget as HTMLInputElement).checked)}
       />
-      <button type="button" className="row-main" disabled={!props.onSelectCipher} onClick={() => props.onSelectCipher?.(props.cipher.id)}>
-        <div className="list-icon-wrap">
+      <button type="button" className="row-main" onClick={() => props.onSelectCipher(props.cipher.id)}>
+        <div className={`list-icon-wrap ${Number(props.cipher.type || 1) === 3 ? 'card-list-icon-wrap' : ''}`}>
           <VaultListIcon cipher={props.cipher} />
         </div>
         <div className="list-text">
@@ -128,109 +145,121 @@ function CipherListItemBody(props: CipherListItemBodyProps) {
           <span className="list-sub" title={props.subtitle}>{props.subtitle}</span>
         </div>
       </button>
-      <button
-        type="button"
-        ref={props.dragButtonRef}
-        className="btn btn-secondary small cipher-drag-btn"
-        title={t('txt_drag_to_reorder')}
-        aria-label={t('txt_drag_to_reorder')}
-        disabled={!props.canReorder}
-        onClick={(event) => event.stopPropagation()}
-        {...props.dragButtonAttributes}
-        {...props.dragButtonListeners}
-      >
-        <GripVertical size={14} className="btn-icon" />
-      </button>
-    </>
-  );
-}
-
-const animateLayoutChanges: AnimateLayoutChanges = (args) =>
-  args.isSorting || args.wasDragging ? defaultAnimateLayoutChanges(args) : false;
-
-function SortableCipherListItem(props: SortableCipherListItemProps) {
-  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: props.cipher.id,
-    disabled: !props.canReorder,
-    animateLayoutChanges,
-  });
-  const dragButtonAttributes = attributes as JSX.HTMLAttributes<HTMLButtonElement>;
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-  };
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      className={`list-item ${props.selected ? 'active' : ''}${isDragging ? ' is-dragging is-sorting-source' : ''}`}
-      onClick={(event) => {
-        const target = event.target as HTMLElement;
-        if (target.closest('.row-check') || target.closest('.cipher-drag-btn')) return;
-        props.onSelectCipher(props.cipher.id);
-      }}
-    >
-      <CipherListItemBody
-        cipher={props.cipher}
-        checked={props.checked}
-        canReorder={props.canReorder}
-        subtitle={props.subtitle}
-        dragButtonRef={setActivatorNodeRef}
-        dragButtonAttributes={dragButtonAttributes}
-        dragButtonListeners={listeners}
-        onToggleSelected={props.onToggleSelected}
-        onSelectCipher={props.onSelectCipher}
-      />
     </div>
   );
-}
+});
 
 export default function VaultListPanel(props: VaultListPanelProps) {
-  const [activeDragId, setActiveDragId] = useState('');
-  const [activeDragWidth, setActiveDragWidth] = useState<number | null>(null);
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 6,
-      },
-    }),
-    useSensor(TouchSensor, {
-      activationConstraint: {
-        delay: 120,
-        tolerance: 8,
-      },
-    })
-  );
+  const [mobileFilterOpen, setMobileFilterOpen] = useState<MobileFilterMenuKey | null>(null);
+  const mobileFilterRef = useRef<HTMLDivElement | null>(null);
+  const createTypeOptions = getCreateTypeOptions();
+  const duplicateDetectionOptions = getDuplicateDetectionOptions();
+  const vaultSortOptions = getVaultSortOptions();
+  const duplicateModeOptions: MobileFilterOption[] = duplicateDetectionOptions.map((option) => ({
+    value: option.value,
+    label: option.label,
+    icon: option.value === 'login-site' ? <Globe size={14} /> : option.value === 'exact' ? <Copy size={14} /> : <KeyRound size={14} />,
+    active: props.duplicateMode === option.value,
+    onSelect: () => props.onDuplicateModeChange(option.value),
+  }));
+  const menuFilterOptions: MobileFilterOption[] = [
+    { value: 'all', label: t('txt_all_items'), icon: <LayoutGrid size={14} />, active: props.sidebarFilter.kind === 'all', onSelect: () => props.onChangeFilter({ kind: 'all' }) },
+    { value: 'favorite', label: t('txt_favorites'), icon: <Star size={14} />, active: props.sidebarFilter.kind === 'favorite', onSelect: () => props.onChangeFilter({ kind: 'favorite' }) },
+    { value: 'archive', label: t('txt_archive'), icon: <Archive size={14} />, active: props.sidebarFilter.kind === 'archive', onSelect: () => props.onChangeFilter({ kind: 'archive' }) },
+    { value: 'trash', label: t('txt_trash'), icon: <Trash2 size={14} />, active: props.sidebarFilter.kind === 'trash', onSelect: () => props.onChangeFilter({ kind: 'trash' }) },
+    { value: 'duplicates', label: t('txt_duplicates'), icon: <Copy size={14} />, active: props.sidebarFilter.kind === 'duplicates', onSelect: () => props.onChangeFilter({ kind: 'duplicates' }) },
+  ];
+  const typeMobileFilterOptions: MobileFilterOption[] = [
+    { value: 'login', label: t('txt_login'), icon: <Globe size={14} />, active: props.sidebarFilter.kind === 'type' && props.sidebarFilter.value === 'login', onSelect: () => props.onChangeFilter({ kind: 'type', value: 'login' }) },
+    { value: 'card', label: t('txt_card'), icon: <CreditCard size={14} />, active: props.sidebarFilter.kind === 'type' && props.sidebarFilter.value === 'card', onSelect: () => props.onChangeFilter({ kind: 'type', value: 'card' }) },
+    { value: 'identity', label: t('txt_identity'), icon: <ShieldUser size={14} />, active: props.sidebarFilter.kind === 'type' && props.sidebarFilter.value === 'identity', onSelect: () => props.onChangeFilter({ kind: 'type', value: 'identity' }) },
+    { value: 'note', label: t('txt_note'), icon: <StickyNote size={14} />, active: props.sidebarFilter.kind === 'type' && props.sidebarFilter.value === 'note', onSelect: () => props.onChangeFilter({ kind: 'type', value: 'note' }) },
+    { value: 'ssh', label: t('txt_ssh_key'), icon: <KeyRound size={14} />, active: props.sidebarFilter.kind === 'type' && props.sidebarFilter.value === 'ssh', onSelect: () => props.onChangeFilter({ kind: 'type', value: 'ssh' }) },
+  ];
+  const folderMobileFilterOptions: MobileFilterOption[] = [
+    { value: '__none__', label: t('txt_no_folder'), icon: <FolderX size={14} />, active: props.sidebarFilter.kind === 'folder' && props.sidebarFilter.folderId === null, onSelect: () => props.onChangeFilter({ kind: 'folder', folderId: null }) },
+    ...props.folders.map((folder) => ({
+      value: folder.id,
+      label: folder.decName || folder.name || folder.id,
+      icon: <FolderIcon size={14} />,
+      active: props.sidebarFilter.kind === 'folder' && props.sidebarFilter.folderId === folder.id,
+      onSelect: () => props.onChangeFilter({ kind: 'folder', folderId: folder.id }),
+    })),
+  ];
+  const menuFilterSelected = menuFilterOptions.find((option) => option.active);
+  const typeFilterSelected = typeMobileFilterOptions.find((option) => option.active);
+  const folderFilterSelected = folderMobileFilterOptions.find((option) => option.active);
+  const duplicateModeSelected = duplicateModeOptions.find((option) => option.active);
 
-  const sortableItems = props.filteredCiphers.map((cipher) => cipher.id);
-  const renderedCiphers = props.visibleCiphers;
-  const activeDragCipher = activeDragId ? props.filteredCiphers.find((cipher) => cipher.id === activeDragId) || null : null;
+  useEffect(() => {
+    const onPointerDown = (event: Event) => {
+      if (!mobileFilterOpen) return;
+      const target = event.target as Node | null;
+      if (mobileFilterRef.current && target && !mobileFilterRef.current.contains(target)) {
+        setMobileFilterOpen(null);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobileFilterOpen(null);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [mobileFilterOpen]);
 
-  const handleDragStart = (event: DragStartEvent) => {
-    setActiveDragId(String(event.active.id));
-    setActiveDragWidth(event.active.rect.current.initial?.width || null);
-  };
-
-  const handleDragEnd = (event: DragEndEvent) => {
-    const activeId = String(event.active.id);
-    const overId = event.over ? String(event.over.id) : '';
-    setActiveDragId('');
-    setActiveDragWidth(null);
-    if (!overId || activeId === overId) return;
-    props.onReorderCipher(activeId, overId);
-  };
-
-  const handleDragCancel = () => {
-    setActiveDragId('');
-    setActiveDragWidth(null);
-  };
-
-  const createMenu = (
-    <div className="create-menu-wrap mobile-fab-wrap" ref={props.createMenuRef}>
+  const renderMobileFilterMenu = (
+    key: MobileFilterMenuKey,
+    label: string,
+    selected: MobileFilterOption | undefined,
+    fallbackIcon: ComponentChildren,
+    options: MobileFilterOption[]
+  ) => (
+    <div className="mobile-vault-filter-control">
       <button
         type="button"
-        className="btn btn-primary small mobile-fab-trigger"
+        className={`mobile-vault-filter-trigger ${mobileFilterOpen === key ? 'active' : ''}`}
+        aria-haspopup="menu"
+        aria-expanded={mobileFilterOpen === key}
+        onClick={() => setMobileFilterOpen((open) => open === key ? null : key)}
+      >
+        <span className="mobile-vault-filter-trigger-icon">{selected?.icon || fallbackIcon}</span>
+        <span className="mobile-vault-filter-trigger-label">{selected?.label || label}</span>
+        <ChevronDown size={13} className="mobile-vault-filter-chevron" />
+      </button>
+      {mobileFilterOpen === key && (
+        <div className="sort-menu mobile-vault-filter-menu" role="menu">
+          {options.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={`sort-menu-item mobile-vault-filter-item ${option.active ? 'active' : ''}`}
+              onClick={() => {
+                option.onSelect();
+                setMobileFilterOpen(null);
+              }}
+              role="menuitemradio"
+              aria-checked={option.active}
+            >
+              <span className="mobile-vault-filter-item-main">
+                <span className="mobile-vault-filter-item-icon">{option.icon}</span>
+                <span>{option.label}</span>
+              </span>
+              {option.active ? <Check size={14} /> : <span className="sort-menu-check-placeholder" />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const createMenu = (
+    <div className={`create-menu-wrap ${props.isMobileLayout ? 'mobile-fab-wrap' : 'desktop-create-menu-wrap'}`} ref={props.createMenuRef}>
+      <button
+        type="button"
+        className={`btn btn-primary small ${props.isMobileLayout ? 'mobile-fab-trigger' : 'desktop-create-trigger'}`}
         aria-label={t('txt_add')}
         title={t('txt_add')}
         onClick={props.onToggleCreateMenu}
@@ -239,7 +268,7 @@ export default function VaultListPanel(props: VaultListPanelProps) {
       </button>
       {props.createMenuOpen && (
         <div className="create-menu">
-          {CREATE_TYPE_OPTIONS.map((option) => (
+          {createTypeOptions.map((option) => (
             <button key={option.type} type="button" className="create-menu-item" onClick={() => props.onStartCreate(option.type)}>
               <CreateTypeIcon type={option.type} />
               <span>{option.label}</span>
@@ -252,142 +281,154 @@ export default function VaultListPanel(props: VaultListPanelProps) {
 
   return (
     <section className="list-col">
-      <div className="list-head">
-        <div className="search-input-wrap">
-          <input
-            className="search-input"
-            placeholder={t('txt_search_your_secure_vault')}
-            value={props.searchInput}
-            onInput={(e) => props.onSearchInput((e.currentTarget as HTMLInputElement).value)}
-            onCompositionStart={props.onSearchCompositionStart}
-            onCompositionEnd={(e) => props.onSearchCompositionEnd((e.currentTarget as HTMLInputElement).value)}
-            onKeyDown={(e) => {
-              if (e.key !== 'Escape' || !props.searchInput) return;
-              e.preventDefault();
-              props.onClearSearch();
-            }}
-          />
-          {!!props.searchInput && (
-            <button
-              type="button"
-              className="search-clear-btn"
-              aria-label={t('txt_clear_search')}
-              title={t('txt_clear_search_esc')}
-              onClick={props.onClearSearch}
-            >
-              <X size={14} />
-            </button>
-          )}
-        </div>
-        <div className="sort-menu-wrap" ref={props.sortMenuRef}>
-          <button
-            type="button"
-            className={`btn btn-secondary small sort-trigger ${props.sortMenuOpen ? 'active' : ''}`}
-            aria-label={t('txt_sort')}
-            title={t('txt_sort')}
-            onClick={props.onToggleSortMenu}
-          >
-            <ArrowUpDown size={14} className="btn-icon" />
-          </button>
-          {props.sortMenuOpen && (
-            <div className="sort-menu">
-              {VAULT_SORT_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`sort-menu-item ${props.sortMode === option.value ? 'active' : ''}`}
-                  onClick={() => props.onSelectSortMode(option.value)}
-                >
-                  <span>{option.label}</span>
-                  {props.sortMode === option.value ? <Check size={14} /> : <span className="sort-menu-check-placeholder" />}
+      <div className="list-toolbar-stack" ref={mobileFilterRef}>
+        <div className={`list-head ${props.selectedCount > 0 ? 'selection-mode' : ''}`}>
+          {props.selectedCount > 0 ? (
+            <>
+              {props.sidebarFilter.kind !== 'duplicates' && (
+                <button type="button" className="btn btn-secondary small" disabled={!props.filteredCiphers.length} onClick={props.onSelectAll}>
+                  <CheckCheck size={14} className="btn-icon" /> {t('txt_select_all')}
                 </button>
-              ))}
-            </div>
+              )}
+              <button type="button" className="btn btn-secondary small" onClick={props.onClearSelection}>
+                <X size={14} className="btn-icon" /> {t('txt_cancel')}
+              </button>
+              {props.sidebarFilter.kind === 'trash' && (
+                <button type="button" className="btn btn-secondary small" disabled={props.busy} onClick={props.onBulkRestore}>
+                  <RefreshCw size={14} className="btn-icon" /> {t('txt_restore')}
+                </button>
+              )}
+              {props.sidebarFilter.kind === 'archive' && (
+                <button type="button" className="btn btn-secondary small" disabled={props.busy} onClick={props.onBulkUnarchive}>
+                  <RotateCcw size={14} className="btn-icon" /> {t('txt_unarchive')}
+                </button>
+              )}
+              {props.sidebarFilter.kind !== 'trash' && props.sidebarFilter.kind !== 'archive' && props.sidebarFilter.kind !== 'duplicates' && (
+                <button type="button" className="btn btn-secondary small" disabled={props.busy} onClick={props.onBulkArchive}>
+                  <Archive size={14} className="btn-icon" /> {t('txt_archive_selected')}
+                </button>
+              )}
+              {props.sidebarFilter.kind !== 'trash' && props.sidebarFilter.kind !== 'archive' && props.sidebarFilter.kind !== 'duplicates' && (
+                <button type="button" className="btn btn-secondary small" disabled={props.busy} onClick={props.onOpenMove}>
+                  <FolderInput size={14} className="btn-icon" /> {t('txt_move')}
+                </button>
+              )}
+              <button type="button" className="btn btn-danger small" disabled={props.busy} onClick={props.onOpenBulkDelete}>
+                <Trash2 size={14} className="btn-icon" /> {props.sidebarFilter.kind === 'trash' ? t('txt_delete_permanently') : t('txt_delete_selected')}
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="search-input-wrap">
+                {props.sidebarFilter.kind === 'duplicates' && props.isMobileLayout ? (
+                  <div className="duplicate-mode-head-menu">
+                    {renderMobileFilterMenu('duplicate', t('txt_duplicate_detection_mode'), duplicateModeSelected, <Copy size={14} />, duplicateModeOptions)}
+                  </div>
+                ) : (
+                  <>
+                    <input
+                      className="search-input"
+                      placeholder={t('txt_search_items_count', { count: props.totalCipherCount })}
+                      value={props.searchInput}
+                      onInput={(e) => props.onSearchInput((e.currentTarget as HTMLInputElement).value)}
+                      onCompositionStart={props.onSearchCompositionStart}
+                      onCompositionEnd={(e) => props.onSearchCompositionEnd((e.currentTarget as HTMLInputElement).value)}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Escape' || !props.searchInput) return;
+                        e.preventDefault();
+                        props.onClearSearch();
+                      }}
+                    />
+                    {!!props.searchInput && (
+                      <button
+                        type="button"
+                        className="search-clear-btn"
+                        aria-label={t('txt_clear_search')}
+                        title={t('txt_clear_search_esc')}
+                        onClick={props.onClearSearch}
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+              {props.sidebarFilter.kind === 'duplicates' && !props.isMobileLayout && (
+                <div className="duplicate-mode-head-menu">
+                  {renderMobileFilterMenu('duplicate', t('txt_duplicate_detection_mode'), duplicateModeSelected, <Copy size={14} />, duplicateModeOptions)}
+                </div>
+              )}
+              <div className="sort-menu-wrap" ref={props.sortMenuRef}>
+                <button
+                  type="button"
+                  className={`btn btn-secondary small sort-trigger sort-trigger-labeled ${props.sortMenuOpen ? 'active' : ''}`}
+                  aria-label={t('txt_sort')}
+                  title={t('txt_sort')}
+                  onClick={props.onToggleSortMenu}
+                >
+                  <ArrowUpDown size={14} className="btn-icon" /> <span>{t('txt_sort')}</span>
+                </button>
+                {props.sortMenuOpen && (
+                  <div className="sort-menu">
+                    {vaultSortOptions.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={`sort-menu-item ${props.sortMode === option.value ? 'active' : ''}`}
+                        onClick={() => props.onSelectSortMode(option.value)}
+                      >
+                        <span>{option.label}</span>
+                        {props.sortMode === option.value ? <Check size={14} /> : <span className="sort-menu-check-placeholder" />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button type="button" className="btn btn-secondary small list-icon-btn" disabled={props.busy || props.loading} onClick={props.onSyncVault}>
+                <RefreshCw size={14} className="btn-icon" /> {t('txt_sync_vault')}
+              </button>
+              {!props.isMobileLayout && props.sidebarFilter !== undefined && createMenu}
+            </>
           )}
         </div>
-        <div className="list-count" title={t('txt_total_items_count', { count: props.totalCipherCount })}>
-          {t('txt_total_items_count', { count: props.totalCipherCount })}
-        </div>
-        <button type="button" className="btn btn-secondary small list-icon-btn" disabled={props.busy || props.loading} onClick={props.onSyncVault}>
-          <RefreshCw size={14} className="btn-icon" /> {t('txt_sync_vault')}
-        </button>
-      </div>
-      <div className="toolbar actions">
-        {props.sidebarFilter.kind === 'duplicates' && (
-          <button type="button" className="btn btn-secondary small" disabled={!props.filteredCiphers.length || props.busy} onClick={props.onSelectDuplicates}>
-            <Check size={14} className="btn-icon" /> {t('txt_select_duplicate_items')}
-          </button>
-        )}
-        {props.selectedCount > 0 && props.sidebarFilter.kind === 'trash' && (
-          <button type="button" className="btn btn-secondary small" disabled={props.busy} onClick={props.onBulkRestore}>
-            <RefreshCw size={14} className="btn-icon" /> {t('txt_restore')}
-          </button>
-        )}
-        {props.selectedCount > 0 && props.sidebarFilter.kind === 'archive' && (
-          <button type="button" className="btn btn-secondary small" disabled={props.busy} onClick={props.onBulkUnarchive}>
-            <RotateCcw size={14} className="btn-icon" /> {t('txt_unarchive')}
-          </button>
-        )}
-        {props.selectedCount > 0 && props.sidebarFilter.kind !== 'trash' && props.sidebarFilter.kind !== 'archive' && props.sidebarFilter.kind !== 'duplicates' && (
-          <button type="button" className="btn btn-secondary small" disabled={props.busy} onClick={props.onBulkArchive}>
-            <Archive size={14} className="btn-icon" /> {t('txt_archive_selected')}
-          </button>
-        )}
-        {props.selectedCount > 0 && props.sidebarFilter.kind !== 'trash' && props.sidebarFilter.kind !== 'archive' && props.sidebarFilter.kind !== 'duplicates' && (
-          <button type="button" className="btn btn-secondary small" disabled={props.busy} onClick={props.onOpenMove}>
-            <FolderInput size={14} className="btn-icon" /> {t('txt_move')}
-          </button>
-        )}
-        {props.selectedCount > 0 && (
-          <button type="button" className="btn btn-secondary small" onClick={props.onClearSelection}>
-            <X size={14} className="btn-icon" /> {t('txt_cancel')}
-          </button>
-        )}
-        <button type="button" className="btn btn-danger small" disabled={!props.selectedCount || props.busy} onClick={props.onOpenBulkDelete}>
-          <Trash2 size={14} className="btn-icon" /> {props.sidebarFilter.kind === 'trash' ? t('txt_delete_permanently') : t('txt_delete_selected')}
-        </button>
-        <button type="button" className="btn btn-secondary small" disabled={!props.filteredCiphers.length} onClick={props.onSelectAll}>
-          <CheckCheck size={14} className="btn-icon" /> {t('txt_select_all')}
-        </button>
-        {props.isMobileLayout && typeof document !== 'undefined'
-          ? props.mobileFabVisible ? createPortal(createMenu, document.body) : null
-          : createMenu}
-      </div>
-
-      <div className="list-panel" ref={props.listPanelRef} onScroll={(event) => props.onScroll((event.currentTarget as HTMLDivElement).scrollTop)}>
-        {!!props.filteredCiphers.length && (
-          <div style={{ paddingTop: `${props.virtualRange.padTop}px`, paddingBottom: `${props.virtualRange.padBottom}px` }}>
-            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragEnd={handleDragEnd} onDragCancel={handleDragCancel}>
-              <SortableContext items={sortableItems} strategy={verticalListSortingStrategy}>
-                {renderedCiphers.map((cipher) => (
-                  <SortableCipherListItem
-                    key={cipher.id}
-                    cipher={cipher}
-                    selected={props.selectedCipherId === cipher.id}
-                    checked={!!props.selectedMap[cipher.id]}
-                    canReorder={props.canReorder}
-                    subtitle={props.listSubtitle(cipher)}
-                    onToggleSelected={props.onToggleSelected}
-                    onSelectCipher={props.onSelectCipher}
-                  />
-                ))}
-              </SortableContext>
-              <DragOverlay adjustScale={false}>
-                {activeDragCipher ? (
-                  <div className="list-item cipher-drag-overlay" style={activeDragWidth ? { width: `${activeDragWidth}px` } : undefined}>
-                    <CipherListItemBody
-                      cipher={activeDragCipher}
-                      checked={!!props.selectedMap[activeDragCipher.id]}
-                      canReorder={true}
-                      subtitle={props.listSubtitle(activeDragCipher)}
-                    />
-                  </div>
-                ) : null}
-              </DragOverlay>
-            </DndContext>
+        {props.isMobileLayout && (
+          <div className="mobile-vault-filter-row" aria-label={t('txt_filter')}>
+            {renderMobileFilterMenu('menu', t('txt_menu'), menuFilterSelected, <LayoutGrid size={14} />, menuFilterOptions)}
+            {renderMobileFilterMenu('type', t('txt_type'), typeFilterSelected, <Globe size={14} />, typeMobileFilterOptions)}
+            {renderMobileFilterMenu('folder', t('txt_folder'), folderFilterSelected, <FolderIcon size={14} />, folderMobileFilterOptions)}
           </div>
         )}
-        {!props.filteredCiphers.length && <div className="empty">{t('txt_no_items')}</div>}
+      </div>
+      {!props.selectedCount && props.isMobileLayout && props.sidebarFilter.kind !== 'duplicates' && typeof document !== 'undefined' && props.mobileFabVisible
+        ? createPortal(createMenu, document.body)
+        : null}
+      <div className="list-panel" ref={props.listPanelRef} onScroll={(event) => props.onScroll((event.currentTarget as HTMLDivElement).scrollTop)}>
+        {props.loading && !props.filteredCiphers.length && <LoadingState lines={7} compact />}
+        {!props.loading && !!props.error && !props.filteredCiphers.length && (
+          <div className="empty vault-error-state">
+            <strong>{props.error}</strong>
+            <button type="button" className="btn btn-secondary small" disabled={props.busy} onClick={props.onSyncVault}>
+              {t('txt_retry_sync')}
+            </button>
+          </div>
+        )}
+        {!!props.filteredCiphers.length && (
+          <div style={{ paddingTop: `${props.virtualRange.padTop}px`, paddingBottom: `${props.virtualRange.padBottom}px` }}>
+            {props.visibleCiphers.map((cipher) => (
+              <CipherListItem
+                key={cipher.id}
+                cipher={cipher}
+                selected={props.selectedCipherId === cipher.id}
+                checked={!!props.selectedMap[cipher.id]}
+                duplicateGroupIndex={props.sidebarFilter.kind === 'duplicates' ? props.duplicateGroupIndexById.get(cipher.id) ?? null : null}
+                subtitle={props.listSubtitle(cipher)}
+                onToggleSelected={props.onToggleSelected}
+                onSelectCipher={props.onSelectCipher}
+              />
+            ))}
+          </div>
+        )}
+        {!props.loading && !props.error && !props.filteredCiphers.length && <div className="empty">{t('txt_no_items')}</div>}
       </div>
     </section>
   );

@@ -281,12 +281,18 @@ export interface VaultDraft {
 export interface ListResponse<T> {
   object: 'list';
   data: T[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+  hasMore?: boolean;
+  continuationToken?: string | null;
 }
 
 export interface WebBootstrapResponse {
   defaultKdfIterations?: number;
   jwtUnsafeReason?: 'missing' | 'default' | 'too_short' | null;
   jwtSecretMinLength?: number;
+  registrationInviteRequired?: boolean;
 }
 
 export interface TokenSuccess {
@@ -308,6 +314,8 @@ export interface TokenSuccess {
   ResetMasterPassword?: boolean;
   scope?: string;
   unofficialServer?: boolean;
+  UserVerificationToken?: string;
+  userVerificationToken?: string;
   UserDecryptionOptions?: unknown;
   userDecryptionOptions?: unknown;
   VaultKeys?: {
@@ -320,6 +328,54 @@ export interface TokenError {
   error?: string;
   error_description?: string;
   TwoFactorProviders?: unknown;
+}
+
+export interface AccountPasskeyCredential {
+  id: string;
+  name: string;
+  prfStatus: 0 | 1 | 2;
+  encryptedPublicKey?: string | null;
+  encryptedUserKey?: string | null;
+  creationDate?: string;
+  revisionDate?: string;
+}
+
+export interface AuthRequest {
+  id: string;
+  publicKey: string;
+  requestDeviceType?: string | null;
+  requestDeviceTypeValue?: number | null;
+  requestDeviceIdentifier: string;
+  requestIpAddress?: string | null;
+  requestCountryName?: string | null;
+  key?: string | null;
+  creationDate: string;
+  requestApproved?: boolean | null;
+  responseDate?: string | null;
+  deviceId?: string | null;
+  requestDeviceId?: string | null;
+  fingerprintPhrase?: string;
+}
+
+export interface AccountPasskeyAssertionOptionsResponse {
+  options: PublicKeyCredentialRequestOptions;
+  token: string;
+}
+
+export interface AccountPasskeyCreationOptionsResponse {
+  options: PublicKeyCredentialCreationOptions;
+  token: string;
+}
+
+export interface AccountPasskeyPrfOption {
+  EncryptedPrivateKey?: string;
+  EncryptedUserKey?: string;
+  CredentialId?: string;
+  Transports?: string[];
+  encryptedPrivateKey?: string;
+  encryptedUserKey?: string;
+  credentialId?: string;
+  transports?: string[];
 }
 
 export interface ToastMessage {
@@ -343,6 +399,37 @@ export interface AdminInvite {
   expiresAt?: string;
 }
 
+export type AuditLogCategory = 'auth' | 'security' | 'device' | 'data' | 'system';
+export type AuditLogLevel = 'info' | 'warn' | 'error' | 'security';
+
+export interface AuditLogEntry {
+  id: string;
+  actorUserId: string | null;
+  actorEmail?: string | null;
+  action: string;
+  category: AuditLogCategory;
+  level: AuditLogLevel;
+  targetType: string | null;
+  targetId: string | null;
+  targetUserEmail?: string | null;
+  metadata: string | null;
+  createdAt: string;
+  object?: 'auditLog';
+}
+
+export interface AuditLogSettings {
+  retentionDays: number | null;
+  maxEntries: number | null;
+}
+
+export interface AuditLogListResult {
+  logs: AuditLogEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+}
+
 export interface AuthorizedDevice {
   id: string;
   name: string;
@@ -358,4 +445,23 @@ export interface AuthorizedDevice {
   trusted: boolean;
   trustedTokenCount: number;
   trustedUntil: string | null;
+}
+
+export interface GlobalEquivalentDomain {
+  type: number;
+  domains: string[];
+  excluded: boolean;
+}
+
+export interface CustomEquivalentDomain {
+  id: string;
+  domains: string[];
+  excluded: boolean;
+}
+
+export interface DomainRules {
+  equivalentDomains: string[][];
+  customEquivalentDomains: CustomEquivalentDomain[];
+  globalEquivalentDomains: GlobalEquivalentDomain[];
+  object: 'domains';
 }

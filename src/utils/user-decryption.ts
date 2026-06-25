@@ -1,4 +1,4 @@
-import { User, UserDecryptionOptions } from '../types';
+import { User, UserDecryptionOptions, WebAuthnPrfDecryptionOption } from '../types';
 
 function normalizeOptionalPublicKey(value: unknown): string {
   if (value == null) return '';
@@ -16,6 +16,7 @@ export function buildAccountKeys(user: Pick<User, 'privateKey' | 'publicKey'>): 
     publicKeyEncryptionKeyPair: {
       wrappedPrivateKey: user.privateKey,
       publicKey,
+      signedPublicKey: null,
       Object: 'publicKeyEncryptionKeyPair',
     },
     Object: 'privateKeys',
@@ -40,7 +41,8 @@ export function buildMasterPasswordUnlock(
 }
 
 export function buildUserDecryptionOptions(
-  user: Pick<User, 'email' | 'key' | 'kdfType' | 'kdfIterations' | 'kdfMemory' | 'kdfParallelism'>
+  user: Pick<User, 'email' | 'key' | 'kdfType' | 'kdfIterations' | 'kdfMemory' | 'kdfParallelism'>,
+  webAuthnPrfOption: WebAuthnPrfDecryptionOption | null = null
 ): UserDecryptionOptions {
   return {
     HasMasterPassword: true,
@@ -48,6 +50,7 @@ export function buildUserDecryptionOptions(
     MasterPasswordUnlock: buildMasterPasswordUnlock(user),
     TrustedDeviceOption: null,
     KeyConnectorOption: null,
+    WebAuthnPrfOption: webAuthnPrfOption,
   };
 }
 

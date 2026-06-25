@@ -4,6 +4,7 @@ import type { ExportRequest, ZipAttachmentEntry } from '@/lib/export-formats';
 import {
   attachNodeWardenEncryptedAttachmentPayload,
   buildAccountEncryptedBitwardenJsonString,
+  buildBitwardenCsvString,
   buildBitwardenZipBytes,
   buildExportFileName,
   buildNodeWardenAttachmentRecords,
@@ -13,6 +14,7 @@ import {
   encryptZipBytesWithPassword,
 } from '@/lib/export-formats';
 import { base64ToBytes, decryptBw, decryptBwFileData, decryptStr } from '@/lib/crypto';
+import { decryptSingleCipher } from '@/lib/decrypt-cipher';
 import { t } from '@/lib/i18n';
 import {
   buildPublicSendUrl,
@@ -39,7 +41,9 @@ import {
   downloadCipherAttachmentDecrypted,
   encryptFolderImportName,
   getAttachmentDownloadInfo,
+  getCipherById,
   importCiphers,
+  permanentDeleteCipher,
   type CiphersImportPayload,
   type ImportedCipherMapEntry,
   updateCipher,
@@ -66,6 +70,13 @@ interface UseVaultSendActionsOptions {
   refetchFolders: () => Promise<{ data?: VaultFolder[] | undefined } | unknown>;
   refetchSends: () => Promise<unknown>;
   onNotify: Notify;
+  patchEncryptedCiphers: (updater: (prev: Cipher[]) => Cipher[]) => void;
+  patchEncryptedFolders: (updater: (prev: VaultFolder[]) => VaultFolder[]) => void;
+  patchEncryptedSends: (updater: (prev: Send[]) => Send[]) => void;
+  patchDecryptedCiphers: (updater: (prev: Cipher[]) => Cipher[]) => void;
+  patchDecryptedFolders: (updater: (prev: VaultFolder[]) => VaultFolder[]) => void;
+  patchDecryptedSends: (updater: (prev: Send[]) => Send[]) => void;
+  refreshVaultRevisionStamp: () => Promise<void>;
 }
 
 function extractImportIdMaps(cipherMap: ImportedCipherMapEntry[] | null) {
@@ -82,6 +93,194 @@ function extractImportIdMaps(cipherMap: ImportedCipherMapEntry[] | null) {
   return { byIndex, bySourceId };
 }
 
+function createOptimisticCipherId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `optimistic:${crypto.randomUUID()}`;
+  }
+  return `optimistic:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function optimisticCipherFromDraft(draft: VaultDraft, current?: Cipher | null): Cipher {
+  const now = new Date().toISOString();
+  const type = Number(draft.type || current?.type || 1) || 1;
+  const next: Cipher = {
+    ...(current || {}),
+    id: current?.id || createOptimisticCipherId(),
+    type,
+    folderId: draft.folderId || null,
+    favorite: !!draft.favorite,
+    reprompt: draft.reprompt ? 1 : 0,
+    name: draft.name || '',
+    notes: draft.notes || '',
+    decName: draft.name || '',
+    decNotes: draft.notes || '',
+    creationDate: current?.creationDate || now,
+    revisionDate: now,
+    deletedDate: current?.deletedDate || null,
+    archivedDate: current?.archivedDate || null,
+  };
+
+  if (type === 1) {
+    next.login = {
+      ...(current?.login || {}),
+      username: draft.loginUsername || '',
+      password: draft.loginPassword || '',
+      totp: draft.loginTotp || '',
+      decUsername: draft.loginUsername || '',
+      decPassword: draft.loginPassword || '',
+      decTotp: draft.loginTotp || '',
+      uris: draft.loginUris.map((uri) => ({
+        ...(uri.extra || {}),
+        uri: uri.uri || '',
+        decUri: uri.uri || '',
+        match: uri.match ?? null,
+      })),
+      fido2Credentials: draft.loginFido2Credentials.map((credential) => ({ ...credential })),
+    };
+  } else {
+    next.login = null;
+  }
+
+  if (type === 3) {
+    next.card = {
+      ...(current?.card || {}),
+      cardholderName: draft.cardholderName || '',
+      number: draft.cardNumber || '',
+      brand: draft.cardBrand || '',
+      expMonth: draft.cardExpMonth || '',
+      expYear: draft.cardExpYear || '',
+      code: draft.cardCode || '',
+      decCardholderName: draft.cardholderName || '',
+      decNumber: draft.cardNumber || '',
+      decBrand: draft.cardBrand || '',
+      decExpMonth: draft.cardExpMonth || '',
+      decExpYear: draft.cardExpYear || '',
+      decCode: draft.cardCode || '',
+    };
+  } else {
+    next.card = null;
+  }
+
+  if (type === 4) {
+    next.identity = {
+      ...(current?.identity || {}),
+      title: draft.identTitle || '',
+      firstName: draft.identFirstName || '',
+      middleName: draft.identMiddleName || '',
+      lastName: draft.identLastName || '',
+      username: draft.identUsername || '',
+      company: draft.identCompany || '',
+      ssn: draft.identSsn || '',
+      passportNumber: draft.identPassportNumber || '',
+      licenseNumber: draft.identLicenseNumber || '',
+      email: draft.identEmail || '',
+      phone: draft.identPhone || '',
+      address1: draft.identAddress1 || '',
+      address2: draft.identAddress2 || '',
+      address3: draft.identAddress3 || '',
+      city: draft.identCity || '',
+      state: draft.identState || '',
+      postalCode: draft.identPostalCode || '',
+      country: draft.identCountry || '',
+      decTitle: draft.identTitle || '',
+      decFirstName: draft.identFirstName || '',
+      decMiddleName: draft.identMiddleName || '',
+      decLastName: draft.identLastName || '',
+      decUsername: draft.identUsername || '',
+      decCompany: draft.identCompany || '',
+      decSsn: draft.identSsn || '',
+      decPassportNumber: draft.identPassportNumber || '',
+      decLicenseNumber: draft.identLicenseNumber || '',
+      decEmail: draft.identEmail || '',
+      decPhone: draft.identPhone || '',
+      decAddress1: draft.identAddress1 || '',
+      decAddress2: draft.identAddress2 || '',
+      decAddress3: draft.identAddress3 || '',
+      decCity: draft.identCity || '',
+      decState: draft.identState || '',
+      decPostalCode: draft.identPostalCode || '',
+      decCountry: draft.identCountry || '',
+    };
+  } else {
+    next.identity = null;
+  }
+
+  if (type === 5) {
+    next.sshKey = {
+      ...(current?.sshKey || {}),
+      privateKey: draft.sshPrivateKey || '',
+      publicKey: draft.sshPublicKey || '',
+      keyFingerprint: draft.sshFingerprint || '',
+      fingerprint: draft.sshFingerprint || '',
+      decPrivateKey: draft.sshPrivateKey || '',
+      decPublicKey: draft.sshPublicKey || '',
+      decFingerprint: draft.sshFingerprint || '',
+    };
+  } else {
+    next.sshKey = null;
+  }
+
+  next.fields = draft.customFields.map((field) => ({
+    type: field.type,
+    name: field.label,
+    value: field.value,
+    decName: field.label,
+    decValue: field.value,
+  }));
+
+  return next;
+}
+
+function isEncryptedFieldUnresolved(raw: unknown, decrypted: unknown): boolean {
+  const encrypted = String(raw || '').trim();
+  if (!looksLikeCipherString(encrypted)) return false;
+  const plain = String(decrypted || '').trim();
+  return !plain || looksLikeCipherString(plain);
+}
+
+function hasUnresolvedCipherData(cipher: Cipher): boolean {
+  const checks: Array<[unknown, unknown]> = [
+    [cipher.name, cipher.decName],
+    [cipher.notes, cipher.decNotes],
+    [cipher.login?.username, cipher.login?.decUsername],
+    [cipher.login?.password, cipher.login?.decPassword],
+    [cipher.login?.totp, cipher.login?.decTotp],
+    ...(cipher.login?.uris || []).map((uri) => [uri.uri, uri.decUri] as [unknown, unknown]),
+    [cipher.card?.cardholderName, cipher.card?.decCardholderName],
+    [cipher.card?.number, cipher.card?.decNumber],
+    [cipher.card?.brand, cipher.card?.decBrand],
+    [cipher.card?.expMonth, cipher.card?.decExpMonth],
+    [cipher.card?.expYear, cipher.card?.decExpYear],
+    [cipher.card?.code, cipher.card?.decCode],
+    [cipher.identity?.title, cipher.identity?.decTitle],
+    [cipher.identity?.firstName, cipher.identity?.decFirstName],
+    [cipher.identity?.middleName, cipher.identity?.decMiddleName],
+    [cipher.identity?.lastName, cipher.identity?.decLastName],
+    [cipher.identity?.username, cipher.identity?.decUsername],
+    [cipher.identity?.company, cipher.identity?.decCompany],
+    [cipher.identity?.ssn, cipher.identity?.decSsn],
+    [cipher.identity?.passportNumber, cipher.identity?.decPassportNumber],
+    [cipher.identity?.licenseNumber, cipher.identity?.decLicenseNumber],
+    [cipher.identity?.email, cipher.identity?.decEmail],
+    [cipher.identity?.phone, cipher.identity?.decPhone],
+    [cipher.identity?.address1, cipher.identity?.decAddress1],
+    [cipher.identity?.address2, cipher.identity?.decAddress2],
+    [cipher.identity?.address3, cipher.identity?.decAddress3],
+    [cipher.identity?.city, cipher.identity?.decCity],
+    [cipher.identity?.state, cipher.identity?.decState],
+    [cipher.identity?.postalCode, cipher.identity?.decPostalCode],
+    [cipher.identity?.country, cipher.identity?.decCountry],
+    [cipher.sshKey?.privateKey, cipher.sshKey?.decPrivateKey],
+    [cipher.sshKey?.publicKey, cipher.sshKey?.decPublicKey],
+    [cipher.sshKey?.keyFingerprint || cipher.sshKey?.fingerprint, cipher.sshKey?.decFingerprint],
+    ...(cipher.fields || []).flatMap((field) => [
+      [field.name, field.decName] as [unknown, unknown],
+      [field.value, field.decValue] as [unknown, unknown],
+    ]),
+  ];
+  return checks.some(([raw, decrypted]) => isEncryptedFieldUnresolved(raw, decrypted));
+}
+
 export default function useVaultSendActions(options: UseVaultSendActionsOptions) {
   const {
     authedFetch,
@@ -95,6 +294,13 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
     refetchFolders,
     refetchSends,
     onNotify,
+    patchEncryptedCiphers,
+    patchEncryptedFolders,
+    patchEncryptedSends,
+    patchDecryptedCiphers,
+    patchDecryptedFolders,
+    patchDecryptedSends,
+    refreshVaultRevisionStamp,
   } = options;
   const [downloadingAttachmentKey, setDownloadingAttachmentKey] = useState('');
   const [attachmentDownloadPercent, setAttachmentDownloadPercent] = useState<number | null>(null);
@@ -107,6 +313,160 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
     const refetchVault = async () => {
       await Promise.all([refetchCiphers(), refetchFolders(), refetchSends()]);
     };
+
+    const requireOnlineWrite = () => {
+      if (session?.accessToken) return;
+      throw new Error(t('txt_offline_vault_readonly'));
+    };
+
+    async function decryptAndPatch(encrypted: Cipher) {
+      if (!session?.symEncKey || !session?.symMacKey) {
+        await refetchCiphers();
+        return;
+      }
+      patchEncryptedCiphers((prev) => {
+        const idx = prev.findIndex((c) => c.id === encrypted.id);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = encrypted;
+          return next;
+        }
+        return [encrypted, ...prev];
+      });
+      const encKey = base64ToBytes(session.symEncKey);
+      const macKey = base64ToBytes(session.symMacKey);
+      const decrypted = await decryptSingleCipher(encrypted, encKey, macKey);
+      patchDecryptedCiphers((prev) => {
+        const idx = prev.findIndex((c) => c.id === decrypted.id);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = decrypted;
+          return next;
+        }
+        return [decrypted, ...prev];
+      });
+    }
+
+    async function decryptAndReplaceOptimistic(optimisticId: string, encrypted: Cipher) {
+      if (!session?.symEncKey || !session?.symMacKey) {
+        await refetchCiphers();
+        return;
+      }
+      patchEncryptedCiphers((prev) => [encrypted, ...prev.filter((cipher) => cipher.id !== optimisticId && cipher.id !== encrypted.id)]);
+      const encKey = base64ToBytes(session.symEncKey);
+      const macKey = base64ToBytes(session.symMacKey);
+      const decrypted = await decryptSingleCipher(encrypted, encKey, macKey);
+      patchDecryptedCiphers((prev) => {
+        const next = prev.filter((cipher) => cipher.id !== optimisticId && cipher.id !== decrypted.id);
+        return [decrypted, ...next];
+      });
+    }
+
+    function removeCipherFromState(id: string) {
+      patchEncryptedCiphers((prev) => prev.filter((c) => c.id !== id));
+      patchDecryptedCiphers((prev) => prev.filter((c) => c.id !== id));
+    }
+
+    function patchCipherBatch(
+      ids: string[],
+      updater: (cipher: Cipher) => Cipher | null,
+      options?: { patchEncrypted?: boolean; patchDecrypted?: boolean }
+    ) {
+      const idSet = new Set(ids.map((id) => String(id || '').trim()).filter(Boolean));
+      if (!idSet.size) return;
+      const shouldPatchEncrypted = options?.patchEncrypted !== false;
+      const shouldPatchDecrypted = options?.patchDecrypted !== false;
+      if (shouldPatchEncrypted) {
+        patchEncryptedCiphers((prev) => {
+          let changed = false;
+          const next: Cipher[] = [];
+          for (const cipher of prev) {
+            if (!idSet.has(cipher.id)) {
+              next.push(cipher);
+              continue;
+            }
+            const updated = updater(cipher);
+            changed = true;
+            if (updated) next.push(updated);
+          }
+          return changed ? next : prev;
+        });
+      }
+      if (shouldPatchDecrypted) {
+        patchDecryptedCiphers((prev) => {
+          let changed = false;
+          const next: Cipher[] = [];
+          for (const cipher of prev) {
+            if (!idSet.has(cipher.id)) {
+              next.push(cipher);
+              continue;
+            }
+            const updated = updater(cipher);
+            changed = true;
+            if (updated) next.push(updated);
+          }
+          return changed ? next : prev;
+        });
+      }
+    }
+
+    function patchFolderBatch(ids: string[], updater: (folder: VaultFolder) => VaultFolder | null) {
+      const idSet = new Set(ids.map((id) => String(id || '').trim()).filter(Boolean));
+      if (!idSet.size) return;
+      patchEncryptedFolders((prev) => {
+        let changed = false;
+        const next: VaultFolder[] = [];
+        for (const folder of prev) {
+          if (!idSet.has(folder.id)) {
+            next.push(folder);
+            continue;
+          }
+          const updated = updater(folder);
+          changed = true;
+          if (updated) next.push(updated);
+        }
+        return changed ? next : prev;
+      });
+      patchDecryptedFolders((prev) => {
+        let changed = false;
+        const next: VaultFolder[] = [];
+        for (const folder of prev) {
+          if (!idSet.has(folder.id)) {
+            next.push(folder);
+            continue;
+          }
+          const updated = updater(folder);
+          changed = true;
+          if (updated) next.push(updated);
+        }
+        return changed ? next : prev;
+      });
+    }
+
+    function upsertEncryptedFolder(folder: VaultFolder) {
+      patchEncryptedFolders((prev) => {
+        const index = prev.findIndex((item) => item.id === folder.id);
+        if (index < 0) return [folder, ...prev];
+        const next = [...prev];
+        next[index] = folder;
+        return next;
+      });
+    }
+
+    function upsertSend(send: Send) {
+      patchEncryptedSends((prev) => {
+        const index = prev.findIndex((item) => item.id === send.id);
+        if (index < 0) return [send, ...prev];
+        const next = [...prev];
+        next[index] = send;
+        return next;
+      });
+    }
+
+    function removeSend(id: string) {
+      patchEncryptedSends((prev) => prev.filter((send) => send.id !== id));
+      patchDecryptedSends((prev) => prev.filter((send) => send.id !== id));
+    }
 
     const uploadImportedAttachments = async (
       attachments: ImportAttachmentFile[],
@@ -169,15 +529,26 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
       async createVaultItem(draft: VaultDraft, attachments: File[] = []) {
         if (!session) return;
         try {
+          requireOnlineWrite();
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_offline_vault_readonly'));
+          throw error;
+        }
+        const optimistic = optimisticCipherFromDraft(draft, null);
+        patchDecryptedCiphers((prev) => [optimistic, ...prev.filter((cipher) => cipher.id !== optimistic.id)]);
+        try {
           const created = await createCipher(authedFetch, session, draft);
           for (const file of attachments) {
             setUploadingAttachmentName(file.name);
             setAttachmentUploadPercent(0);
             await uploadCipherAttachment(authedFetch, session, created.id, file, undefined, setAttachmentUploadPercent);
           }
-          await Promise.all([refetchCiphers(), refetchFolders()]);
+          const finalCipher = attachments.length ? await getCipherById(authedFetch, created.id) : created;
+          await decryptAndReplaceOptimistic(optimistic.id, finalCipher);
+          void refreshVaultRevisionStamp();
           onNotify('success', t('txt_item_created'));
         } catch (error) {
+          patchDecryptedCiphers((prev) => prev.filter((cipher) => cipher.id !== optimistic.id));
           onNotify('error', error instanceof Error ? error.message : t('txt_create_item_failed'));
           throw error;
         } finally {
@@ -188,10 +559,37 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
 
       async updateVaultItem(cipher: Cipher, draft: VaultDraft, options?: { addFiles?: File[]; removeAttachmentIds?: string[] }) {
         if (!session) return;
+        try {
+          requireOnlineWrite();
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_offline_vault_readonly'));
+          throw error;
+        }
+        if (hasUnresolvedCipherData(cipher)) {
+          throw new Error(t('txt_decrypt_failed_2'));
+        }
         const addFiles = Array.isArray(options?.addFiles) ? options.addFiles : [];
         const removeAttachmentIds = Array.isArray(options?.removeAttachmentIds) ? options.removeAttachmentIds : [];
+        const previousCipher: Cipher = {
+          ...cipher,
+          login: cipher.login ? { ...cipher.login, uris: cipher.login.uris ? [...cipher.login.uris] : cipher.login.uris } : cipher.login,
+          card: cipher.card ? { ...cipher.card } : cipher.card,
+          identity: cipher.identity ? { ...cipher.identity } : cipher.identity,
+          sshKey: cipher.sshKey ? { ...cipher.sshKey } : cipher.sshKey,
+          fields: cipher.fields ? cipher.fields.map((field) => ({ ...field })) : cipher.fields,
+          attachments: cipher.attachments ? cipher.attachments.map((attachment) => ({ ...attachment })) : cipher.attachments,
+          passwordHistory: cipher.passwordHistory ? cipher.passwordHistory.map((entry) => ({ ...entry })) : cipher.passwordHistory,
+        };
+        const optimistic = optimisticCipherFromDraft(draft, cipher);
+        if (removeAttachmentIds.length || addFiles.length) {
+          const removedSet = new Set(removeAttachmentIds.map((id) => String(id || '').trim()).filter(Boolean));
+          optimistic.attachments = (cipher.attachments || [])
+            .filter((attachment) => !removedSet.has(String(attachment?.id || '').trim()))
+            .map((attachment) => ({ ...attachment }));
+        }
+        patchCipherBatch([cipher.id], () => optimistic, { patchEncrypted: false });
         try {
-          await updateCipher(authedFetch, session, cipher, draft);
+          const updated = await updateCipher(authedFetch, session, cipher, draft);
           for (const attachmentId of removeAttachmentIds) {
             const id = String(attachmentId || '').trim();
             if (!id) continue;
@@ -202,9 +600,14 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
             setAttachmentUploadPercent(0);
             await uploadCipherAttachment(authedFetch, session, cipher.id, file, cipher, setAttachmentUploadPercent);
           }
-          await Promise.all([refetchCiphers(), refetchFolders()]);
+          const finalCipher = addFiles.length || removeAttachmentIds.length
+            ? await getCipherById(authedFetch, cipher.id)
+            : updated;
+          await decryptAndPatch(finalCipher);
+          void refreshVaultRevisionStamp();
           onNotify('success', t('txt_item_updated'));
         } catch (error) {
+          patchCipherBatch([cipher.id], () => previousCipher, { patchEncrypted: false });
           onNotify('error', error instanceof Error ? error.message : t('txt_update_item_failed'));
           throw error;
         } finally {
@@ -233,10 +636,33 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
 
       async deleteVaultItem(cipher: Cipher) {
         try {
-          await deleteCipher(authedFetch, cipher.id);
-          await Promise.all([refetchCiphers(), refetchFolders()]);
+          requireOnlineWrite();
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_offline_vault_readonly'));
+          throw error;
+        }
+        const previousCipher = { ...cipher };
+        if (cipher.deletedDate || (cipher as { deletedAt?: string | null }).deletedAt) {
+          try {
+            await permanentDeleteCipher(authedFetch, cipher.id);
+            patchCipherBatch([cipher.id], () => null);
+            void refreshVaultRevisionStamp();
+            onNotify('success', t('txt_item_deleted_permanently'));
+          } catch (error) {
+            onNotify('error', error instanceof Error ? error.message : t('txt_permanent_delete_item_failed'));
+            throw error;
+          }
+          return;
+        }
+        const deletedDate = new Date().toISOString();
+        patchCipherBatch([cipher.id], (current) => ({ ...current, deletedDate, archivedDate: null, revisionDate: deletedDate }));
+        try {
+          const deleted = await deleteCipher(authedFetch, cipher.id);
+          await decryptAndPatch(deleted);
+          void refreshVaultRevisionStamp();
           onNotify('success', t('txt_item_deleted'));
         } catch (error) {
+          patchCipherBatch([cipher.id], () => previousCipher, { patchEncrypted: false });
           onNotify('error', error instanceof Error ? error.message : t('txt_delete_item_failed'));
           throw error;
         }
@@ -244,10 +670,21 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
 
       async archiveVaultItem(cipher: Cipher) {
         try {
-          await archiveCipher(authedFetch, cipher.id);
-          await Promise.all([refetchCiphers(), refetchFolders()]);
+          requireOnlineWrite();
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_offline_vault_readonly'));
+          throw error;
+        }
+        const previousCipher = { ...cipher };
+        const archivedDate = new Date().toISOString();
+        patchCipherBatch([cipher.id], (current) => ({ ...current, archivedDate, deletedDate: null, revisionDate: archivedDate }));
+        try {
+          const archived = await archiveCipher(authedFetch, cipher.id);
+          await decryptAndPatch(archived);
+          void refreshVaultRevisionStamp();
           onNotify('success', t('txt_item_archived'));
         } catch (error) {
+          patchCipherBatch([cipher.id], () => previousCipher, { patchEncrypted: false });
           onNotify('error', error instanceof Error ? error.message : t('txt_archive_item_failed'));
           throw error;
         }
@@ -255,10 +692,21 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
 
       async unarchiveVaultItem(cipher: Cipher) {
         try {
-          await unarchiveCipher(authedFetch, cipher.id);
-          await Promise.all([refetchCiphers(), refetchFolders()]);
+          requireOnlineWrite();
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_offline_vault_readonly'));
+          throw error;
+        }
+        const previousCipher = { ...cipher };
+        const revisionDate = new Date().toISOString();
+        patchCipherBatch([cipher.id], (current) => ({ ...current, archivedDate: null, revisionDate }));
+        try {
+          const unarchived = await unarchiveCipher(authedFetch, cipher.id);
+          await decryptAndPatch(unarchived);
+          void refreshVaultRevisionStamp();
           onNotify('success', t('txt_item_unarchived'));
         } catch (error) {
+          patchCipherBatch([cipher.id], () => previousCipher, { patchEncrypted: false });
           onNotify('error', error instanceof Error ? error.message : t('txt_unarchive_item_failed'));
           throw error;
         }
@@ -266,8 +714,16 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
 
       async bulkDeleteVaultItems(ids: string[]) {
         try {
+          requireOnlineWrite();
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_offline_vault_readonly'));
+          throw error;
+        }
+        try {
           await bulkDeleteCiphers(authedFetch, ids);
-          await Promise.all([refetchCiphers(), refetchFolders()]);
+          const deletedDate = new Date().toISOString();
+          patchCipherBatch(ids, (cipher) => ({ ...cipher, deletedDate, archivedDate: null }));
+          void refreshVaultRevisionStamp();
           onNotify('success', t('txt_deleted_selected_items'));
         } catch (error) {
           onNotify('error', error instanceof Error ? error.message : t('txt_bulk_delete_failed'));
@@ -277,8 +733,16 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
 
       async bulkArchiveVaultItems(ids: string[]) {
         try {
+          requireOnlineWrite();
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_offline_vault_readonly'));
+          throw error;
+        }
+        try {
           await bulkArchiveCiphers(authedFetch, ids);
-          await Promise.all([refetchCiphers(), refetchFolders()]);
+          const archivedDate = new Date().toISOString();
+          patchCipherBatch(ids, (cipher) => ({ ...cipher, archivedDate, deletedDate: null }));
+          void refreshVaultRevisionStamp();
           onNotify('success', t('txt_archived_selected_items'));
         } catch (error) {
           onNotify('error', error instanceof Error ? error.message : t('txt_bulk_archive_failed'));
@@ -288,8 +752,15 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
 
       async bulkUnarchiveVaultItems(ids: string[]) {
         try {
+          requireOnlineWrite();
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_offline_vault_readonly'));
+          throw error;
+        }
+        try {
           await bulkUnarchiveCiphers(authedFetch, ids);
-          await Promise.all([refetchCiphers(), refetchFolders()]);
+          patchCipherBatch(ids, (cipher) => ({ ...cipher, archivedDate: null }));
+          void refreshVaultRevisionStamp();
           onNotify('success', t('txt_unarchived_selected_items'));
         } catch (error) {
           onNotify('error', error instanceof Error ? error.message : t('txt_bulk_unarchive_failed'));
@@ -299,8 +770,15 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
 
       async bulkMoveVaultItems(ids: string[], folderId: string | null) {
         try {
+          requireOnlineWrite();
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_offline_vault_readonly'));
+          throw error;
+        }
+        try {
           await bulkMoveCiphers(authedFetch, ids, folderId);
-          await Promise.all([refetchCiphers(), refetchFolders()]);
+          patchCipherBatch(ids, (cipher) => ({ ...cipher, folderId }));
+          void refreshVaultRevisionStamp();
           onNotify('success', t('txt_moved_selected_items'));
         } catch (error) {
           onNotify('error', error instanceof Error ? error.message : t('txt_bulk_move_failed'));
@@ -315,9 +793,26 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
           return;
         }
         try {
+          requireOnlineWrite();
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_offline_vault_readonly'));
+          throw error;
+        }
+        try {
           if (!session) throw new Error(t('txt_vault_key_unavailable'));
-          await createFolder(authedFetch, session, folderName);
-          await refetchFolders();
+          const created = await createFolder(authedFetch, session, folderName);
+          upsertEncryptedFolder(created);
+          patchDecryptedFolders((prev) => [
+            {
+              id: created.id,
+              name: created.name || folderName,
+              decName: folderName,
+              revisionDate: created.revisionDate,
+              creationDate: created.creationDate,
+            },
+            ...prev,
+          ]);
+          void refreshVaultRevisionStamp();
           onNotify('success', t('txt_folder_created'));
         } catch (error) {
           onNotify('error', error instanceof Error ? error.message : t('txt_create_folder_failed'));
@@ -332,8 +827,17 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
           return;
         }
         try {
+          requireOnlineWrite();
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_offline_vault_readonly'));
+          throw error;
+        }
+        try {
           await deleteFolder(authedFetch, id);
-          await Promise.all([refetchCiphers(), refetchFolders()]);
+          patchFolderBatch([id], () => null);
+          patchEncryptedCiphers((prev) => prev.map((cipher) => (cipher.folderId === id ? { ...cipher, folderId: null } : cipher)));
+          patchDecryptedCiphers((prev) => prev.map((cipher) => (cipher.folderId === id ? { ...cipher, folderId: null } : cipher)));
+          void refreshVaultRevisionStamp();
           onNotify('success', t('txt_folder_deleted'));
         } catch (error) {
           onNotify('error', error instanceof Error ? error.message : t('txt_delete_folder_failed'));
@@ -353,9 +857,21 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
           return;
         }
         try {
+          requireOnlineWrite();
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_offline_vault_readonly'));
+          throw error;
+        }
+        try {
           if (!session) throw new Error(t('txt_vault_key_unavailable'));
-          await updateFolder(authedFetch, session, id, nextName);
-          await refetchFolders();
+          const updated = await updateFolder(authedFetch, session, id, nextName);
+          upsertEncryptedFolder(updated);
+          patchDecryptedFolders((prev) => prev.map((folder) => (
+            folder.id === id
+              ? { ...folder, name: updated.name || folder.name, decName: nextName, revisionDate: updated.revisionDate }
+              : folder
+          )));
+          void refreshVaultRevisionStamp();
           onNotify('success', t('txt_folder_updated'));
         } catch (error) {
           onNotify('error', error instanceof Error ? error.message : t('txt_update_folder_failed'));
@@ -365,8 +881,15 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
 
       async bulkRestoreVaultItems(ids: string[]) {
         try {
+          requireOnlineWrite();
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_offline_vault_readonly'));
+          throw error;
+        }
+        try {
           await bulkRestoreCiphers(authedFetch, ids);
-          await Promise.all([refetchCiphers(), refetchFolders()]);
+          patchCipherBatch(ids, (cipher) => ({ ...cipher, deletedDate: null }));
+          void refreshVaultRevisionStamp();
           onNotify('success', t('txt_restored_selected_items'));
         } catch (error) {
           onNotify('error', error instanceof Error ? error.message : t('txt_bulk_restore_failed'));
@@ -376,8 +899,15 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
 
       async bulkPermanentDeleteVaultItems(ids: string[]) {
         try {
+          requireOnlineWrite();
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_offline_vault_readonly'));
+          throw error;
+        }
+        try {
           await bulkPermanentDeleteCiphers(authedFetch, ids);
-          await Promise.all([refetchCiphers(), refetchFolders()]);
+          patchCipherBatch(ids, () => null);
+          void refreshVaultRevisionStamp();
           onNotify('success', t('txt_deleted_selected_items_permanently'));
         } catch (error) {
           onNotify('error', error instanceof Error ? error.message : t('txt_bulk_permanent_delete_failed'));
@@ -389,8 +919,19 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
         const ids = Array.from(new Set(folderIds.map((id) => String(id || '').trim()).filter(Boolean)));
         if (!ids.length) return;
         try {
+          requireOnlineWrite();
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_offline_vault_readonly'));
+          throw error;
+        }
+        try {
           await bulkDeleteFolders(authedFetch, ids);
-          await Promise.all([refetchCiphers(), refetchFolders()]);
+          const removedIds = new Set(ids);
+          patchEncryptedFolders((prev) => prev.filter((folder) => !removedIds.has(folder.id)));
+          patchEncryptedCiphers((prev) => prev.map((cipher) => (cipher.folderId && removedIds.has(cipher.folderId) ? { ...cipher, folderId: null } : cipher)));
+          patchDecryptedFolders((prev) => prev.filter((folder) => !removedIds.has(folder.id)));
+          patchDecryptedCiphers((prev) => prev.map((cipher) => (cipher.folderId && removedIds.has(cipher.folderId) ? { ...cipher, folderId: null } : cipher)));
+          void refreshVaultRevisionStamp();
           onNotify('success', t('txt_folders_deleted'));
         } catch (error) {
           onNotify('error', error instanceof Error ? error.message : t('txt_delete_all_folders_failed'));
@@ -406,13 +947,20 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
       async createSend(draft: SendDraft, autoCopyLink: boolean) {
         if (!session) return;
         try {
+          requireOnlineWrite();
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_offline_vault_readonly'));
+          throw error;
+        }
+        try {
           const fileName = draft.type === 'file' ? String(draft.file?.name || '').trim() : '';
           if (fileName) {
             setUploadingSendFileName(fileName);
             setSendUploadPercent(0);
           }
           const created = await createSend(authedFetch, session, draft, fileName ? setSendUploadPercent : undefined);
-          await refetchSends();
+          upsertSend(created);
+          void refreshVaultRevisionStamp();
           if (autoCopyLink && created.key && session.symEncKey && session.symMacKey) {
             const keyPart = await buildSendShareKey(created.key, session.symEncKey, session.symMacKey);
             const shareUrl = buildPublicSendUrl(window.location.origin, created.accessId, keyPart);
@@ -431,8 +979,15 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
       async updateSend(send: Send, draft: SendDraft, autoCopyLink: boolean) {
         if (!session) return;
         try {
+          requireOnlineWrite();
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_offline_vault_readonly'));
+          throw error;
+        }
+        try {
           const updated = await updateSend(authedFetch, session, send, draft);
-          await refetchSends();
+          upsertSend(updated);
+          void refreshVaultRevisionStamp();
           if (autoCopyLink && updated.key && session.symEncKey && session.symMacKey) {
             const keyPart = await buildSendShareKey(updated.key, session.symEncKey, session.symMacKey);
             const shareUrl = buildPublicSendUrl(window.location.origin, updated.accessId, keyPart);
@@ -447,8 +1002,15 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
 
       async deleteSend(send: Send) {
         try {
+          requireOnlineWrite();
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_offline_vault_readonly'));
+          throw error;
+        }
+        try {
           await deleteSend(authedFetch, send.id);
-          await refetchSends();
+          removeSend(send.id);
+          void refreshVaultRevisionStamp();
           onNotify('success', t('txt_send_deleted'));
         } catch (error) {
           onNotify('error', error instanceof Error ? error.message : t('txt_delete_send_failed'));
@@ -458,8 +1020,17 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
 
       async bulkDeleteSends(ids: string[]) {
         try {
+          requireOnlineWrite();
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_offline_vault_readonly'));
+          throw error;
+        }
+        try {
           await bulkDeleteSends(authedFetch, ids);
-          await refetchSends();
+          const idSet = new Set(ids.map((id) => String(id || '').trim()).filter(Boolean));
+          patchEncryptedSends((prev) => prev.filter((send) => !idSet.has(send.id)));
+          patchDecryptedSends((prev) => prev.filter((send) => !idSet.has(send.id)));
+          void refreshVaultRevisionStamp();
           onNotify('success', t('txt_deleted_selected_sends'));
         } catch (error) {
           onNotify('error', error instanceof Error ? error.message : t('txt_bulk_delete_sends_failed'));
@@ -473,6 +1044,7 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
         attachments: ImportAttachmentFile[] = []
       ): Promise<ImportResultSummary> {
         if (!session?.symEncKey || !session?.symMacKey) throw new Error(t('txt_vault_key_unavailable'));
+        requireOnlineWrite();
 
         const mode = options.folderMode || 'original';
         const targetFolderId = (options.targetFolderId || '').trim() || null;
@@ -710,6 +1282,12 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
             mimeType: 'application/json',
             bytes: new TextEncoder().encode(await getPlainJson()),
           };
+        } else if (format === 'bitwarden_csv') {
+          result = {
+            fileName: buildExportFileName(format),
+            mimeType: 'text/csv;charset=utf-8',
+            bytes: new TextEncoder().encode(buildBitwardenCsvString(await getPlainJsonDoc())),
+          };
         } else if (format === 'bitwarden_encrypted_json') {
           if (request.encryptedJsonMode === 'password') {
             const plainJson = await getPlainJson();
@@ -812,10 +1390,17 @@ export default function useVaultSendActions(options: UseVaultSendActionsOptions)
     encryptedFolders,
     importAuthedFetch,
     onNotify,
+    patchDecryptedCiphers,
+    patchDecryptedFolders,
+    patchDecryptedSends,
+    patchEncryptedCiphers,
+    patchEncryptedFolders,
+    patchEncryptedSends,
     profile,
     refetchCiphers,
     refetchFolders,
     refetchSends,
+    refreshVaultRevisionStamp,
     session,
     sendUploadPercent,
     uploadingAttachmentName,

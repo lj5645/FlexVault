@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { Download, Eye, Lock } from 'lucide-preact';
+import { Clipboard, Download, Eye, Lock } from 'lucide-preact';
 import { accessPublicSend, accessPublicSendFile, decryptPublicSend, decryptPublicSendFileBytes } from '@/lib/api/send';
+import { copyTextToClipboard } from '@/lib/clipboard';
 import { toBufferSource } from '@/lib/crypto';
 import { downloadBytesAsFile, readResponseBytesWithProgress } from '@/lib/download';
+import NotFoundPage from '@/components/NotFoundPage';
 import StandalonePageFrame from '@/components/StandalonePageFrame';
+import { getDemoPublicSend, IS_DEMO_MODE } from '@/lib/demo';
 import { t } from '@/lib/i18n';
 
 interface PublicSendPageProps {
@@ -25,6 +28,25 @@ interface PublicSendData {
   decFileName?: string | null;
   expirationDate?: string | null;
   file?: PublicSendFileData | null;
+}
+
+function decodeBase64Url(value: string): Uint8Array | null {
+  try {
+    const raw = value.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = raw + '='.repeat((4 - (raw.length % 4)) % 4);
+    const decoded = atob(padded);
+    const out = new Uint8Array(decoded.length);
+    for (let i = 0; i < decoded.length; i += 1) out[i] = decoded.charCodeAt(i);
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+function hasUsableSendKey(keyPart: string | null): boolean {
+  if (!keyPart) return false;
+  const bytes = decodeBase64Url(keyPart);
+  return !!bytes && bytes.length >= 16;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -65,11 +87,13 @@ function parsePublicSendData(value: unknown): PublicSendData | null {
 }
 
 export default function PublicSendPage(props: PublicSendPageProps) {
-  const [loading, setLoading] = useState(true);
+  const initialDemoSend = IS_DEMO_MODE ? getDemoPublicSend(props.accessId) : null;
+  const [loading, setLoading] = useState(!IS_DEMO_MODE);
   const [password, setPassword] = useState('');
   const [needPassword, setNeedPassword] = useState(false);
   const [error, setError] = useState('');
-  const [sendData, setSendData] = useState<PublicSendData | null>(null);
+  const [notFound, setNotFound] = useState(IS_DEMO_MODE && !initialDemoSend);
+  const [sendData, setSendData] = useState<PublicSendData | null>(initialDemoSend);
   const [busy, setBusy] = useState(false);
   const [downloadPercent, setDownloadPercent] = useState<number | null>(null);
   const loadRequestRef = useRef(0);
@@ -83,8 +107,25 @@ export default function PublicSendPage(props: PublicSendPageProps) {
     loadAbortRef.current = controller;
     setBusy(true);
     setError('');
+    setNotFound(false);
     setLoading(true);
     try {
+      if (IS_DEMO_MODE) {
+        const demoSend = getDemoPublicSend(props.accessId);
+        if (!demoSend) {
+          setNotFound(true);
+          setSendData(null);
+          return;
+        }
+        setSendData(demoSend);
+        setNeedPassword(false);
+        return;
+      }
+      if (!hasUsableSendKey(props.keyPart)) {
+        setNotFound(true);
+        setSendData(null);
+        return;
+      }
       const data = await accessPublicSend(props.accessId, props.keyPart, pass, { signal: controller.signal });
       if (controller.signal.aborted || requestId !== loadRequestRef.current) return;
       if (!props.keyPart) {
@@ -104,6 +145,10 @@ export default function PublicSendPage(props: PublicSendPageProps) {
       if (err.status === 401) {
         setNeedPassword(true);
         setError(t('txt_this_send_is_password_protected'));
+      } else if (err.status === 404) {
+        setNeedPassword(false);
+        setNotFound(true);
+        setError('');
       } else {
         setError(err.message || t('txt_failed_to_open_send'));
       }
@@ -121,6 +166,11 @@ export default function PublicSendPage(props: PublicSendPageProps) {
     setDownloadPercent(null);
     setError('');
     try {
+      if (IS_DEMO_MODE) {
+        const bytes = new TextEncoder().encode('NodeWarden demo file Send.\nThis download is generated locally in demo mode.\n');
+        downloadBytesAsFile(bytes, sendData.decFileName || sendData.file?.fileName || 'nodewarden-demo-send.txt', 'application/octet-stream');
+        return;
+      }
       const url = await accessPublicSendFile(sendData.id, sendData.file.id, props.keyPart, password || undefined);
       const resp = await fetch(url);
       if (!resp.ok) throw new Error(t('txt_download_failed'));
@@ -152,15 +202,31 @@ export default function PublicSendPage(props: PublicSendPageProps) {
   }
 
   useEffect(() => {
+    if (IS_DEMO_MODE) {
+      const demoSend = getDemoPublicSend(props.accessId);
+      setSendData(demoSend);
+      setNotFound(!demoSend);
+      setNeedPassword(false);
+      setError('');
+      setLoading(false);
+      return;
+    }
     void loadSend();
     return () => {
       loadAbortRef.current?.abort();
     };
   }, [props.accessId, props.keyPart]);
 
+  if (!loading && notFound) {
+    return <NotFoundPage title={t('txt_page_not_found')} message={t('txt_send_unavailable')} />;
+  }
+
   return (
     <div className="auth-page public-send-page">
-      <StandalonePageFrame title={t('txt_nodewarden_send')}>
+      <StandalonePageFrame
+        title={sendData ? (sendData.decName || t('txt_no_name')) : t('txt_nodewarden_send')}
+        eyebrow={sendData ? t('txt_nodewarden_send') : undefined}
+      >
         {loading && <p className="muted">{t('txt_loading')}</p>}
 
         {!loading && needPassword && (
@@ -190,9 +256,20 @@ export default function PublicSendPage(props: PublicSendPageProps) {
 
         {!loading && sendData && (
           <>
-            <h2 className="public-send-title">{sendData.decName || t('txt_no_name')}</h2>
             {sendData.type === 0 ? (
               <div className="card public-send-card">
+                <div className="public-send-card-head">
+                  <span>{t('txt_text_send')}</span>
+                  <button
+                    type="button"
+                    className="btn btn-secondary small public-send-copy-btn"
+                    disabled={!sendData.decText}
+                    onClick={() => void copyTextToClipboard(sendData.decText || '')}
+                  >
+                    <Clipboard size={14} className="btn-icon" />
+                    {t('txt_copy')}
+                  </button>
+                </div>
                 <div className="notes">{sendData.decText || ''}</div>
               </div>
             ) : (

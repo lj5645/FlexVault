@@ -91,6 +91,7 @@ const COMMON_IMPORT_SOURCE_IDS: ImportSourceId[] = [
   'lastpass',
   'dashlane_csv',
   'dashlane_json',
+  'keepass_csv',
   'keepass_xml',
   'keepassx_csv',
 ];

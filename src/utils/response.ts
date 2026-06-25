@@ -38,17 +38,19 @@ function isWildcardCorsPath(path: string): boolean {
 function getCorsPolicy(request: Request): { allowOrigin: string | null; allowCredentials: boolean } {
   const url = new URL(request.url);
   const origin = request.headers.get('Origin');
-  if (isWildcardCorsPath(url.pathname)) {
-    return { allowOrigin: '*', allowCredentials: false };
-  }
   if (!origin) {
-    return { allowOrigin: null, allowCredentials: false };
+    return isWildcardCorsPath(url.pathname)
+      ? { allowOrigin: '*', allowCredentials: false }
+      : { allowOrigin: null, allowCredentials: false };
   }
   if (origin === url.origin) {
     return { allowOrigin: origin, allowCredentials: true };
   }
   if (isExtensionOrigin(origin)) {
-    return { allowOrigin: origin, allowCredentials: false };
+    return { allowOrigin: origin, allowCredentials: true };
+  }
+  if (isWildcardCorsPath(url.pathname)) {
+    return { allowOrigin: '*', allowCredentials: false };
   }
   return { allowOrigin: null, allowCredentials: false };
 }
@@ -98,7 +100,9 @@ export function applyCors(
   headers.set('X-Frame-Options', 'DENY');
   headers.set('X-Content-Type-Options', 'nosniff');
   headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-  headers.set('Content-Security-Policy', "frame-ancestors 'none'; img-src 'self' data:");
+  if (!headers.has('Content-Security-Policy')) {
+    headers.set('Content-Security-Policy', "frame-ancestors 'none'; img-src 'self' data:");
+  }
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,

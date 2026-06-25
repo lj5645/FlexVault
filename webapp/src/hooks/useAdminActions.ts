@@ -20,26 +20,39 @@ export default function useAdminActions(options: UseAdminActionsOptions) {
   return useMemo(
     () => ({
       refreshAdmin() {
-        void refetchUsers();
-        void refetchInvites();
+        void Promise.all([refetchUsers(), refetchInvites()]).catch((error) => {
+          onNotify('error', error instanceof Error ? error.message : t('txt_load_admin_data_failed'));
+        });
       },
 
       async createInvite(hours: number) {
-        await createInvite(authedFetch, hours);
-        await refetchInvites();
-        onNotify('success', t('txt_invite_created'));
+        try {
+          await createInvite(authedFetch, hours);
+          await refetchInvites();
+          onNotify('success', t('txt_invite_created'));
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_create_invite_failed'));
+        }
       },
 
       async toggleUserStatus(userId: string, status: 'active' | 'banned') {
-        await setUserStatus(authedFetch, userId, status === 'active' ? 'banned' : 'active');
-        await refetchUsers();
-        onNotify('success', t('txt_user_status_updated'));
+        try {
+          await setUserStatus(authedFetch, userId, status === 'active' ? 'banned' : 'active');
+          await refetchUsers();
+          onNotify('success', t('txt_user_status_updated'));
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_update_user_status_failed'));
+        }
       },
 
       async revokeInvite(code: string) {
-        await revokeInvite(authedFetch, code);
-        await refetchInvites();
-        onNotify('success', t('txt_invite_revoked'));
+        try {
+          await revokeInvite(authedFetch, code);
+          await refetchInvites();
+          onNotify('success', t('txt_invite_revoked'));
+        } catch (error) {
+          onNotify('error', error instanceof Error ? error.message : t('txt_revoke_invite_failed'));
+        }
       },
 
       async deleteAllInvites() {
@@ -50,9 +63,13 @@ export default function useAdminActions(options: UseAdminActionsOptions) {
           onConfirm: () => {
             onSetConfirm(null);
             void (async () => {
-              await deleteAllInvites(authedFetch);
-              await refetchInvites();
-              onNotify('success', t('txt_all_invites_deleted'));
+              try {
+                await deleteAllInvites(authedFetch);
+                await refetchInvites();
+                onNotify('success', t('txt_all_invites_deleted'));
+              } catch (error) {
+                onNotify('error', error instanceof Error ? error.message : t('txt_delete_all_invites_failed'));
+              }
             })();
           },
         });
@@ -66,9 +83,13 @@ export default function useAdminActions(options: UseAdminActionsOptions) {
           onConfirm: () => {
             onSetConfirm(null);
             void (async () => {
-              await deleteUser(authedFetch, userId);
-              await refetchUsers();
-              onNotify('success', t('txt_user_deleted'));
+              try {
+                await deleteUser(authedFetch, userId);
+                await refetchUsers();
+                onNotify('success', t('txt_user_deleted'));
+              } catch (error) {
+                onNotify('error', error instanceof Error ? error.message : t('txt_delete_user_failed'));
+              }
             })();
           },
         });

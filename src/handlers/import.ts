@@ -1,11 +1,11 @@
 import { Env, Cipher, Folder, CipherType } from '../types';
-import { notifyUserVaultSync } from '../durable/notifications';
+import { notifyUserVaultSync } from '../durable/notifications-hub';
 import { StorageService } from '../services/storage';
 import { errorResponse, jsonResponse } from '../utils/response';
 import { readActingDeviceIdentifier } from '../utils/device';
 import { generateUUID } from '../utils/uuid';
 import { LIMITS } from '../config/limits';
-import { normalizeCipherLoginForStorage, normalizeCipherSshKeyForCompatibility } from './ciphers';
+import { normalizeCipherLoginForStorage, normalizeCipherSshKeyForCompatibility, validateCipherEncryptedFieldsForCompatibility } from './ciphers';
 
 // Bitwarden client import request format
 interface CiphersImportRequest {
@@ -19,7 +19,7 @@ interface CiphersImportRequest {
     sshKey?: any | null;
     key?: string | null;
     login?: {
-      uris?: Array<{ uri: string | null; match?: number | null }> | null;
+      uris?: Array<{ uri: string | null; uriChecksum?: string | null; match?: number | null }> | null;
       username?: string | null;
       password?: string | null;
       totp?: string | null;
@@ -195,7 +195,7 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
         uris: login.uris?.map((u: any) => ({
           ...u,
           uri: u.uri ?? null,
-          uriChecksum: null,
+          uriChecksum: u.uriChecksum ?? null,
           match: u.match ?? null,
         })) || null,
         totp: login.totp ?? null,
@@ -252,6 +252,10 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
       deletedAt: null,
     };
     cipher.login = normalizeCipherLoginForStorage(cipher.login);
+    const compatibilityError = validateCipherEncryptedFieldsForCompatibility(cipher);
+    if (compatibilityError) {
+      return errorResponse(`Cipher ${i + 1}: ${compatibilityError}`, 400);
+    }
 
     cipherRows.push(cipher);
     cipherMapRows.push({ index: i, sourceId, id: cipher.id });
@@ -289,7 +293,7 @@ export async function handleCiphersImport(request: Request, env: Env, userId: st
 
   // Update revision date
   const revisionDate = await storage.updateRevisionDate(userId);
-  await notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
+  notifyUserVaultSync(env, userId, revisionDate, readActingDeviceIdentifier(request));
 
   if (returnCipherMap) {
     return jsonResponse({

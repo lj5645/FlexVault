@@ -34,6 +34,22 @@ export async function deleteAttachment(db: D1Database, id: string): Promise<void
   await db.prepare('DELETE FROM attachments WHERE id = ?').bind(id).run();
 }
 
+export async function bulkDeleteAttachmentsByIds(
+  db: D1Database,
+  sqlChunkSize: SqlChunkSize,
+  attachmentIds: string[]
+): Promise<void> {
+  const uniqueIds = [...new Set(attachmentIds.map((id) => String(id || '').trim()).filter(Boolean))];
+  if (!uniqueIds.length) return;
+  const chunkSize = sqlChunkSize(0);
+
+  for (let i = 0; i < uniqueIds.length; i += chunkSize) {
+    const chunk = uniqueIds.slice(i, i + chunkSize);
+    const placeholders = chunk.map(() => '?').join(',');
+    await db.prepare(`DELETE FROM attachments WHERE id IN (${placeholders})`).bind(...chunk).run();
+  }
+}
+
 export async function getAttachmentsByCipher(db: D1Database, cipherId: string): Promise<Attachment[]> {
   const res = await db
     .prepare('SELECT id, cipher_id, file_name, size, size_name, key FROM attachments WHERE cipher_id = ?')
@@ -117,11 +133,6 @@ export async function getAttachmentsByUserId(db: D1Database, userId: string): Pr
 
 export async function addAttachmentToCipher(db: D1Database, cipherId: string, attachmentId: string): Promise<void> {
   await db.prepare('UPDATE attachments SET cipher_id = ? WHERE id = ?').bind(cipherId, attachmentId).run();
-}
-
-export async function removeAttachmentFromCipher(cipherId: string, attachmentId: string): Promise<void> {
-  void cipherId;
-  void attachmentId;
 }
 
 export async function deleteAllAttachmentsByCipher(db: D1Database, cipherId: string): Promise<void> {

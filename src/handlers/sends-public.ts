@@ -2,6 +2,7 @@ import { Env, SendType } from '../types';
 import { StorageService } from '../services/storage';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
 import { jsonResponse, errorResponse } from '../utils/response';
+import { sanitizeDownloadContentType } from '../utils/content-type';
 import { LIMITS } from '../config/limits';
 import {
   createSendAccessToken,
@@ -21,6 +22,7 @@ import {
   getSafeJwtSecret,
   hasEmailAuth,
   isSendAvailable,
+  notifySendUpdateForRequest,
   notifyVaultSyncForRequest,
   parseStoredSendData,
   resolveSendFromIdOrAccessId,
@@ -32,6 +34,14 @@ import {
   verifySendPassword,
   verifySendPasswordHashB64,
 } from './sends-shared';
+
+function contentDispositionAttachment(fileName: string | null | undefined): string {
+  const fallback = 'send-file';
+  const value = String(fileName || fallback)
+    .replace(/[\r\n"]/g, '_')
+    .trim() || fallback;
+  return `attachment; filename="${value}"`;
+}
 
 export async function handleAccessSend(request: Request, env: Env, accessId: string): Promise<Response> {
   const storage = new StorageService(env.DB);
@@ -89,7 +99,8 @@ export async function handleAccessSend(request: Request, env: Env, accessId: str
     }
     send.accessCount += 1;
     const revisionDate = await storage.updateRevisionDate(send.userId);
-    await notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
+    notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
+    notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
   }
 
   const creatorIdentifier = await getCreatorIdentifier(storage, send);
@@ -162,7 +173,8 @@ export async function handleAccessSendFile(
   }
   send.accessCount += 1;
   const revisionDate = await storage.updateRevisionDate(send.userId);
-  await notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
+  notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
+  notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
 
   const token = await createSendFileDownloadToken(send.id, fileId, secret);
   const url = new URL(request.url);
@@ -202,7 +214,8 @@ export async function handleAccessSendV2(request: Request, env: Env): Promise<Re
     }
     send.accessCount += 1;
     const revisionDate = await storage.updateRevisionDate(send.userId);
-    await notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
+    notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
+    notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
   }
 
   const creatorIdentifier = await getCreatorIdentifier(storage, send);
@@ -241,7 +254,8 @@ export async function handleAccessSendFileV2(request: Request, env: Env, fileId:
   }
   send.accessCount += 1;
   const revisionDate = await storage.updateRevisionDate(send.userId);
-  await notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
+  notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
+  notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
 
   const downloadToken = await createSendFileDownloadToken(send.id, fileId, jwt.secret);
   const url = new URL(request.url);
@@ -282,6 +296,9 @@ export async function handleDownloadSendFile(
   if (!object) {
     return errorResponse('Send file not found', 404);
   }
+  const send = await storage.getSend(sendId);
+  const data = send ? parseStoredSendData(send) : {};
+  const fileName = typeof data.fileName === 'string' ? data.fileName : fileId;
 
   const firstUse = await storage.consumeAttachmentDownloadToken(`send:${claims.jti}`, claims.exp);
   if (!firstUse) {
@@ -290,9 +307,11 @@ export async function handleDownloadSendFile(
 
   return new Response(object.body, {
     headers: {
-      'Content-Type': object.contentType || 'application/octet-stream',
+      'Content-Type': sanitizeDownloadContentType(object.contentType),
       'Content-Length': String(object.size),
+      'Content-Disposition': contentDispositionAttachment(fileName),
       'Cache-Control': 'private, no-cache',
+      'X-Content-Type-Options': 'nosniff',
     },
   });
 }

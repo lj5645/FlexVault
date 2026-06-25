@@ -7,6 +7,10 @@ import {
   handleAdminRevokeInvite,
   handleAdminSetUserStatus,
   handleAdminDeleteUser,
+  handleAdminListAuditLogs,
+  handleAdminGetAuditLogSettings,
+  handleAdminUpdateAuditLogSettings,
+  handleAdminClearAuditLogs,
 } from './handlers/admin';
 import { handleAdminBackupRoute } from './router-admin-backup';
 
@@ -19,6 +23,20 @@ export async function handleAdminRoute(
 ): Promise<Response | null> {
   if (path === '/api/admin/users' && method === 'GET') {
     return handleAdminListUsers(request, env, actorUser);
+  }
+
+  if (path === '/api/admin/logs' && method === 'GET') {
+    return handleAdminListAuditLogs(request, env, actorUser);
+  }
+
+  if (path === '/api/admin/logs' && method === 'DELETE') {
+    return handleAdminClearAuditLogs(request, env, actorUser);
+  }
+
+  if (path === '/api/admin/logs/settings') {
+    if (method === 'GET') return handleAdminGetAuditLogSettings(request, env, actorUser);
+    if (method === 'PUT' || method === 'POST') return handleAdminUpdateAuditLogSettings(request, env, actorUser);
+    return null;
   }
 
   const adminBackupResponse = await handleAdminBackupRoute(request, env, actorUser, path, method);

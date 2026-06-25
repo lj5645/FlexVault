@@ -1,5 +1,6 @@
 import { useState } from 'preact/hooks';
-import { ArrowLeft, Eye, EyeOff, LogIn, LogOut, Unlock, UserPlus } from 'lucide-preact';
+import { ArrowLeft, Eye, EyeOff, KeyRound, LogIn, LogOut, Unlock, UserPlus } from 'lucide-preact';
+import NetworkStatusBadge from '@/components/NetworkStatusBadge';
 import StandalonePageFrame from '@/components/StandalonePageFrame';
 import { t } from '@/lib/i18n';
 
@@ -19,18 +20,28 @@ interface RegisterValues {
 
 interface AuthViewsProps {
   mode: 'login' | 'register' | 'locked';
-  pendingAction: 'login' | 'register' | 'unlock' | null;
+  relaxedLoginInput?: boolean;
+  authPlaceholder?: string;
+  unlockPlaceholder?: string;
+  pendingAction: 'login' | 'passkey' | 'register' | 'unlock' | null;
   unlockReady: boolean;
   unlockPreparing: boolean;
   loginValues: LoginValues;
+  pendingPasskeyPasswordEmail?: string | null;
+  passkeyPassword: string;
   registerValues: RegisterValues;
+  registrationInviteRequired?: boolean;
   unlockPassword: string;
   emailForLock: string;
   loginHintLoading: boolean;
   onChangeLogin: (next: LoginValues) => void;
+  onChangePasskeyPassword: (password: string) => void;
   onChangeRegister: (next: RegisterValues) => void;
   onChangeUnlock: (password: string) => void;
   onSubmitLogin: () => void;
+  onSubmitPasskey: () => void;
+  onSubmitPasskeyUnlock: () => void;
+  onSubmitPasskeyPassword: () => void;
   onSubmitRegister: () => void;
   onSubmitUnlock: () => void;
   onGotoLogin: () => void;
@@ -46,6 +57,7 @@ function PasswordField(props: {
   onInput: (v: string) => void;
   autoFocus?: boolean;
   autoComplete?: string;
+  placeholder?: string;
 }) {
   const [show, setShow] = useState(false);
   return (
@@ -59,6 +71,7 @@ function PasswordField(props: {
           onInput={(e) => props.onInput((e.currentTarget as HTMLInputElement).value)}
           autoFocus={props.autoFocus}
           autoComplete={props.autoComplete}
+          placeholder={props.placeholder}
         />
         <button type="button" className="eye-btn" onClick={() => setShow((v) => !v)}>
           {show ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -70,13 +83,16 @@ function PasswordField(props: {
 
 export default function AuthViews(props: AuthViewsProps) {
   const loginBusy = props.pendingAction === 'login';
+  const passkeyBusy = props.pendingAction === 'passkey';
   const registerBusy = props.pendingAction === 'register';
   const unlockBusy = props.pendingAction === 'unlock';
+  const passkeyPasswordPending = !!props.pendingPasskeyPasswordEmail;
+  const showInviteCodeField = props.registrationInviteRequired !== false || !!props.registerValues.inviteCode.trim();
 
   if (props.mode === 'locked') {
     return (
       <div className="auth-page">
-        <StandalonePageFrame title={t('txt_unlock_vault')}>
+        <StandalonePageFrame title={t('txt_unlock_vault')} titleAccessory={<NetworkStatusBadge />}>
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -90,6 +106,7 @@ export default function AuthViews(props: AuthViewsProps) {
               value={props.unlockPassword}
               autoFocus
               autoComplete="current-password"
+              placeholder={props.unlockPlaceholder}
               onInput={props.onChangeUnlock}
             />
             <div className="auth-support-row">
@@ -106,12 +123,21 @@ export default function AuthViews(props: AuthViewsProps) {
             {props.unlockPreparing ? (
               <p className="muted standalone-muted">{t('txt_loading')}</p>
             ) : null}
-            <button type="submit" className="btn btn-primary full" disabled={unlockBusy || props.unlockPreparing || !props.unlockReady}>
+            <button type="submit" className="btn btn-primary full" disabled={unlockBusy || passkeyBusy || props.unlockPreparing || !props.unlockReady}>
               <Unlock size={16} className="btn-icon" />
               {unlockBusy ? t('txt_unlocking') : props.unlockPreparing ? t('txt_loading') : t('txt_unlock')}
             </button>
+            <button
+              type="button"
+              className="btn btn-secondary full"
+              onClick={props.onSubmitPasskeyUnlock}
+              disabled={unlockBusy || passkeyBusy || props.unlockPreparing || !props.unlockReady}
+            >
+              <KeyRound size={16} className="btn-icon" />
+              {passkeyBusy ? t('txt_unlocking') : t('txt_unlock_with_passkey')}
+            </button>
             <div className="or">{t('txt_or')}</div>
-            <button type="button" className="btn btn-secondary full" onClick={props.onLogout} disabled={unlockBusy}>
+            <button type="button" className="btn btn-secondary full" onClick={props.onLogout} disabled={unlockBusy || passkeyBusy}>
               <LogOut size={16} className="btn-icon" />
               {t('txt_log_out')}
             </button>
@@ -124,7 +150,7 @@ export default function AuthViews(props: AuthViewsProps) {
   if (props.mode === 'register') {
     return (
       <div className="auth-page">
-        <StandalonePageFrame title={t('txt_create_account')}>
+        <StandalonePageFrame title={t('txt_create_account')} titleAccessory={<NetworkStatusBadge />}>
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -178,17 +204,19 @@ export default function AuthViews(props: AuthViewsProps) {
                 }
               />
             </label>
-            <label className="field">
-              <span>{t('txt_invite_code_optional')}</span>
-              <input
-                className="input"
-                value={props.registerValues.inviteCode}
-                autoComplete="off"
-                onInput={(e) =>
-                  props.onChangeRegister({ ...props.registerValues, inviteCode: (e.currentTarget as HTMLInputElement).value })
-                }
-              />
-            </label>
+            {showInviteCodeField ? (
+              <label className="field">
+                <span>{t('txt_invite_code_required')}</span>
+                <input
+                  className="input"
+                  value={props.registerValues.inviteCode}
+                  autoComplete="off"
+                  onInput={(e) =>
+                    props.onChangeRegister({ ...props.registerValues, inviteCode: (e.currentTarget as HTMLInputElement).value })
+                  }
+                />
+              </label>
+            ) : null}
             <button type="submit" className="btn btn-primary full" disabled={registerBusy}>
               <UserPlus size={16} className="btn-icon" />
               {registerBusy ? t('txt_registering') : t('txt_create_account')}
@@ -206,20 +234,50 @@ export default function AuthViews(props: AuthViewsProps) {
 
   return (
     <div className="auth-page">
-      <StandalonePageFrame title={t('txt_log_in')}>
+      <StandalonePageFrame title={t('txt_log_in')} titleAccessory={<NetworkStatusBadge />}>
         <form
           onSubmit={(e) => {
             e.preventDefault();
+            if (passkeyPasswordPending) {
+              props.onSubmitPasskeyPassword();
+              return;
+            }
             props.onSubmitLogin();
           }}
         >
+          {passkeyPasswordPending ? (
+            <>
+              <p className="muted standalone-muted">{props.pendingPasskeyPasswordEmail}</p>
+              <input type="text" value={props.pendingPasskeyPasswordEmail || ''} autoComplete="username" readOnly hidden tabIndex={-1} aria-hidden="true" />
+              <PasswordField
+                label={t('txt_master_password')}
+                value={props.passkeyPassword}
+                autoFocus
+                autoComplete="current-password"
+                placeholder={props.authPlaceholder}
+                onInput={props.onChangePasskeyPassword}
+              />
+              <button type="submit" className="btn btn-primary full" disabled={loginBusy}>
+                <Unlock size={16} className="btn-icon" />
+                {loginBusy ? t('txt_unlocking') : t('txt_unlock')}
+              </button>
+              <div className="or">{t('txt_or')}</div>
+              <button type="button" className="btn btn-secondary full" onClick={props.onGotoLogin} disabled={loginBusy}>
+                <ArrowLeft size={16} className="btn-icon" />
+                {t('txt_back_to_login')}
+              </button>
+            </>
+          ) : (
+            <>
           <label className="field">
             <span>{t('txt_email')}</span>
             <input
               className="input"
-              type="email"
+              type={props.relaxedLoginInput ? 'text' : 'email'}
               value={props.loginValues.email}
               autoComplete="username"
+              placeholder={props.authPlaceholder}
+              autoFocus
               onInput={(e) => props.onChangeLogin({ ...props.loginValues, email: (e.currentTarget as HTMLInputElement).value })}
             />
           </label>
@@ -227,8 +285,8 @@ export default function AuthViews(props: AuthViewsProps) {
             label={t('txt_master_password')}
             value={props.loginValues.password}
             autoComplete="current-password"
+            placeholder={props.authPlaceholder}
             onInput={(v) => props.onChangeLogin({ ...props.loginValues, password: v })}
-            autoFocus
           />
           <div className="auth-support-row">
             <span />
@@ -236,22 +294,28 @@ export default function AuthViews(props: AuthViewsProps) {
               type="button"
               className="auth-link-btn"
               onClick={props.onTogglePasswordHint}
-              disabled={loginBusy || !props.loginValues.email.trim()}
+              disabled={loginBusy || props.loginHintLoading || !props.loginValues.email.trim()}
             >
               {props.loginHintLoading
                 ? t('txt_loading_password_hint')
                 : t('txt_show_password_hint')}
             </button>
           </div>
-          <button type="submit" className="btn btn-primary full" disabled={loginBusy}>
+          <button type="submit" className="btn btn-primary full" disabled={loginBusy || passkeyBusy}>
             <LogIn size={16} className="btn-icon" />
             {loginBusy ? t('txt_logging_in') : t('txt_log_in')}
           </button>
+          <button type="button" className="btn btn-secondary full" onClick={props.onSubmitPasskey} disabled={loginBusy || passkeyBusy}>
+            <KeyRound size={16} className="btn-icon" />
+            {passkeyBusy ? t('txt_logging_in') : t('txt_login_with_passkey')}
+          </button>
           <div className="or">{t('txt_or')}</div>
-          <button type="button" className="btn btn-secondary full" onClick={props.onGotoRegister} disabled={loginBusy}>
+          <button type="button" className="btn btn-secondary full" onClick={props.onGotoRegister} disabled={loginBusy || passkeyBusy}>
             <UserPlus size={16} className="btn-icon" />
             {t('txt_create_account')}
           </button>
+            </>
+          )}
         </form>
       </StandalonePageFrame>
     </div>

@@ -7,6 +7,7 @@ export interface BitwardenFolderInput {
 
 export interface BitwardenUriInput {
   uri?: string | null;
+  uriChecksum?: string | null;
   match?: number | null;
 }
 

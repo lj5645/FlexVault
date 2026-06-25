@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
-import { Clipboard, KeyRound, Lightbulb, RefreshCw, ShieldCheck, ShieldOff } from 'lucide-preact';
+import { Clipboard, KeyRound, RefreshCw, ShieldCheck, ShieldOff, Trash2 } from 'lucide-preact';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import qrcode from 'qrcode-generator';
-import type { Profile } from '@/lib/types';
-import { t } from '@/lib/i18n';
+import type { AccountPasskeyCredential, Profile } from '@/lib/types';
+import { AVAILABLE_LOCALES, getLocale, setLocale, t, type Locale } from '@/lib/i18n';
 import ConfirmDialog from '@/components/ConfirmDialog';
 
 interface SettingsPageProps {
@@ -13,15 +13,28 @@ interface SettingsPageProps {
   sessionTimeoutAction: 'lock' | 'logout';
   onChangePassword: (currentPassword: string, nextPassword: string, nextPassword2: string) => Promise<void>;
   onSavePasswordHint: (masterPasswordHint: string) => Promise<void>;
-  onEnableTotp: (secret: string, token: string) => Promise<void>;
+  onEnableTotp: (secret: string, token: string, masterPassword: string) => Promise<void>;
   onOpenDisableTotp: () => void;
   onGetRecoveryCode: (masterPassword: string) => Promise<string>;
   onGetApiKey: (masterPassword: string) => Promise<string>;
   onRotateApiKey: (masterPassword: string) => Promise<string>;
+  onListAccountPasskeys: () => Promise<AccountPasskeyCredential[]>;
+  onCreateAccountPasskey: (name: string, masterPassword: string, directUnlock: boolean) => Promise<AccountPasskeyCredential | null>;
+  onEnableAccountPasskeyDirectUnlock: (id: string, masterPassword: string) => Promise<void>;
+  onDeleteAccountPasskey: (id: string, masterPassword: string) => Promise<void>;
   onLockTimeoutChange: (minutes: 0 | 1 | 5 | 15 | 30) => void;
   onSessionTimeoutActionChange: (action: 'lock' | 'logout') => void;
-  onNotify?: (type: 'success' | 'error', text: string) => void;
+  onNotify?: (type: 'success' | 'error' | 'warning', text: string) => void;
 }
+
+type MasterPasswordPromptAction =
+  | 'enableTotp'
+  | 'recovery'
+  | 'apiKey'
+  | 'rotateApiKey'
+  | 'createPasskey'
+  | 'enablePasskeyDirectUnlock'
+  | 'deletePasskey';
 
 const LOCK_TIMEOUT_OPTIONS = [
   { value: 1, labelKey: 'txt_timeout_1_minute' },
@@ -64,6 +77,13 @@ function clearLegacyTotpSetupSecrets(): void {
   }
 }
 
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) return t('txt_dash');
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return t('txt_dash');
+  return date.toLocaleString();
+}
+
 export default function SettingsPage(props: SettingsPageProps) {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -74,11 +94,17 @@ export default function SettingsPage(props: SettingsPageProps) {
   const [totpLocked, setTotpLocked] = useState(props.totpEnabled);
   const [recoveryCode, setRecoveryCode] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [accountPasskeys, setAccountPasskeys] = useState<AccountPasskeyCredential[]>([]);
+  const [accountPasskeysLoading, setAccountPasskeysLoading] = useState(false);
+  const [accountPasskeyName, setAccountPasskeyName] = useState(t('txt_account_passkey'));
+  const [accountPasskeyDirectUnlock, setAccountPasskeyDirectUnlock] = useState(false);
+  const [accountPasskeyPromptId, setAccountPasskeyPromptId] = useState<string | null>(null);
   const [rotateApiKeyConfirmOpen, setRotateApiKeyConfirmOpen] = useState(false);
   const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false);
-  const [masterPasswordPrompt, setMasterPasswordPrompt] = useState<null | 'recovery' | 'apiKey' | 'rotateApiKey'>(null);
+  const [masterPasswordPrompt, setMasterPasswordPrompt] = useState<MasterPasswordPromptAction | null>(null);
   const [masterPasswordPromptValue, setMasterPasswordPromptValue] = useState('');
   const [masterPasswordPromptSubmitting, setMasterPasswordPromptSubmitting] = useState(false);
+  const [selectedLocale, setSelectedLocale] = useState<Locale>(() => getLocale());
 
   useEffect(() => {
     clearLegacyTotpSetupSecrets();
@@ -96,6 +122,10 @@ export default function SettingsPage(props: SettingsPageProps) {
     setPasswordHint(props.profile.masterPasswordHint || '');
   }, [props.profile.masterPasswordHint]);
 
+  useEffect(() => {
+    void refreshAccountPasskeys();
+  }, [props.profile.id]);
+
   const qrDataUrl = useMemo(() => {
     const qr = qrcode(0, 'M');
     qr.addData(buildOtpUri(props.profile.email, secret));
@@ -106,22 +136,35 @@ export default function SettingsPage(props: SettingsPageProps) {
   }, [props.profile.email, secret]);
 
   async function enableTotp(): Promise<void> {
+    if (totpLocked) return;
+    if (!secret.trim() || !token.trim()) {
+      props.onNotify?.('error', t('txt_secret_and_code_are_required'));
+      return;
+    }
+    openMasterPasswordPrompt('enableTotp');
+  }
+
+  async function refreshAccountPasskeys(): Promise<void> {
+    setAccountPasskeysLoading(true);
     try {
-      await props.onEnableTotp(secret, token);
-      setTotpLocked(true);
-    } catch {
-      // Keep inputs editable after a failed attempt.
+      setAccountPasskeys(await props.onListAccountPasskeys());
+    } catch (error) {
+      props.onNotify?.('error', error instanceof Error ? error.message : t('txt_account_passkeys_load_failed'));
+    } finally {
+      setAccountPasskeysLoading(false);
     }
   }
 
-  function openMasterPasswordPrompt(action: 'recovery' | 'apiKey' | 'rotateApiKey'): void {
+  function openMasterPasswordPrompt(action: MasterPasswordPromptAction, credentialId?: string): void {
     setMasterPasswordPrompt(action);
+    setAccountPasskeyPromptId(credentialId || null);
     setMasterPasswordPromptValue('');
   }
 
   function closeMasterPasswordPrompt(): void {
     if (masterPasswordPromptSubmitting) return;
     setMasterPasswordPrompt(null);
+    setAccountPasskeyPromptId(null);
     setMasterPasswordPromptValue('');
   }
 
@@ -130,7 +173,10 @@ export default function SettingsPage(props: SettingsPageProps) {
     const masterPassword = masterPasswordPromptValue;
     setMasterPasswordPromptSubmitting(true);
     try {
-      if (masterPasswordPrompt === 'recovery') {
+      if (masterPasswordPrompt === 'enableTotp') {
+        await props.onEnableTotp(secret, token, masterPassword);
+        setTotpLocked(true);
+      } else if (masterPasswordPrompt === 'recovery') {
         const code = await props.onGetRecoveryCode(masterPassword);
         setRecoveryCode(code);
         props.onNotify?.('success', t('txt_recovery_code_loaded'));
@@ -138,13 +184,25 @@ export default function SettingsPage(props: SettingsPageProps) {
         const key = await props.onGetApiKey(masterPassword);
         setApiKey(key);
         setApiKeyDialogOpen(true);
-      } else {
+      } else if (masterPasswordPrompt === 'rotateApiKey') {
         const key = await props.onRotateApiKey(masterPassword);
         setApiKey(key);
         setApiKeyDialogOpen(true);
         props.onNotify?.('success', t('txt_api_key_rotated'));
+      } else if (masterPasswordPrompt === 'createPasskey') {
+        const credential = await props.onCreateAccountPasskey(accountPasskeyName, masterPassword, accountPasskeyDirectUnlock);
+        if (credential) await refreshAccountPasskeys();
+      } else if (masterPasswordPrompt === 'enablePasskeyDirectUnlock') {
+        if (!accountPasskeyPromptId) throw new Error(t('txt_account_passkey_not_found'));
+        await props.onEnableAccountPasskeyDirectUnlock(accountPasskeyPromptId, masterPassword);
+        await refreshAccountPasskeys();
+      } else if (masterPasswordPrompt === 'deletePasskey') {
+        if (!accountPasskeyPromptId) throw new Error(t('txt_account_passkey_not_found'));
+        await props.onDeleteAccountPasskey(accountPasskeyPromptId, masterPassword);
+        await refreshAccountPasskeys();
       }
       setMasterPasswordPrompt(null);
+      setAccountPasskeyPromptId(null);
       setMasterPasswordPromptValue('');
     } catch (error) {
       props.onNotify?.('error', error instanceof Error ? error.message : t('txt_master_password_is_required_2'));
@@ -154,17 +212,31 @@ export default function SettingsPage(props: SettingsPageProps) {
   }
 
   const masterPasswordPromptTitle =
-    masterPasswordPrompt === 'recovery'
+    masterPasswordPrompt === 'enableTotp'
+      ? t('txt_enable_totp')
+      : masterPasswordPrompt === 'recovery'
       ? t('txt_view_recovery_code')
       : masterPasswordPrompt === 'rotateApiKey'
         ? t('txt_rotate_api_key')
-        : t('txt_view_api_key');
+        : masterPasswordPrompt === 'createPasskey'
+          ? t('txt_add_account_passkey')
+          : masterPasswordPrompt === 'enablePasskeyDirectUnlock'
+            ? t('txt_enable_passkey_direct_unlock')
+            : masterPasswordPrompt === 'deletePasskey'
+              ? t('txt_delete_account_passkey')
+              : t('txt_view_api_key');
 
-  function formatDateTime(value: string | null | undefined): string {
-    if (!value) return t('txt_dash');
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) return value;
-    return parsed.toLocaleString();
+  function accountPasskeyStatusText(credential: AccountPasskeyCredential): string {
+    if (credential.prfStatus === 0) return t('txt_direct_unlock');
+    if (credential.prfStatus === 1) return t('txt_login_only');
+    return t('txt_prf_not_supported');
+  }
+
+  async function changeLocale(next: Locale): Promise<void> {
+    if (next === getLocale()) return;
+    setSelectedLocale(next);
+    await setLocale(next);
+    window.location.reload();
   }
 
   return (
@@ -200,9 +272,23 @@ export default function SettingsPage(props: SettingsPageProps) {
         </div>
       </section>
 
-      <section className="card settings-module settings-module-placeholder">
-        <Lightbulb size={26} aria-hidden="true" />
-        <span>{t('txt_in_planning')}</span>
+      <section className="card settings-module">
+        <h3>{t('txt_language')}</h3>
+        <label className="field">
+          <span>{t('txt_display_language')}</span>
+          <select
+            className="input"
+            value={selectedLocale}
+            onInput={(e) => void changeLocale((e.currentTarget as HTMLSelectElement).value as Locale)}
+          >
+            {AVAILABLE_LOCALES.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <div className="field-help">{t('txt_language_saved_locally')}</div>
+        </label>
       </section>
 
       <section className="card settings-module">
@@ -259,8 +345,15 @@ export default function SettingsPage(props: SettingsPageProps) {
       </section>
 
       <section className="card settings-module">
-        <h3>{t('txt_totp')}</h3>
-        {totpLocked && <div className="status-ok">{t('txt_totp_is_enabled_for_this_account')}</div>}
+        <div className="settings-module-head">
+          <h3>{t('txt_totp')}</h3>
+          {totpLocked && (
+            <span className="totp-status-pill">
+              <ShieldCheck size={14} aria-hidden="true" />
+              {t('txt_enabled')}
+            </span>
+          )}
+        </div>
         <div className="totp-grid">
           <div className="totp-qr">
             <img src={qrDataUrl} alt="TOTP QR" />
@@ -316,8 +409,107 @@ export default function SettingsPage(props: SettingsPageProps) {
         </div>
       </section>
 
-      <section className="card settings-module">
-        <h3>{t('txt_recovery_code_and_api_key')}</h3>
+      <section className="card settings-module account-passkeys-module">
+        <div className="settings-module-head">
+          <h3>{t('txt_account_passkeys')}</h3>
+          <button
+            type="button"
+            className="btn btn-secondary small"
+            disabled={accountPasskeysLoading}
+            title={t('txt_refresh')}
+            aria-label={t('txt_refresh')}
+            onClick={() => void refreshAccountPasskeys()}
+          >
+            <RefreshCw size={14} className="btn-icon" />
+            {t('txt_refresh')}
+          </button>
+        </div>
+        <div className="field-grid">
+          <label className="field">
+            <span>{t('txt_passkey_name')}</span>
+            <input
+              className="input"
+              maxLength={128}
+              value={accountPasskeyName}
+              placeholder={t('txt_account_passkey_name_placeholder')}
+              onInput={(e) => setAccountPasskeyName((e.currentTarget as HTMLInputElement).value)}
+            />
+          </label>
+          <div className="field account-passkey-mode-field">
+            <span>{t('txt_account_passkey_mode')}</span>
+            <label className="account-passkey-toggle">
+              <input
+                type="checkbox"
+                checked={accountPasskeyDirectUnlock}
+                onInput={(e) => setAccountPasskeyDirectUnlock((e.currentTarget as HTMLInputElement).checked)}
+              />
+              <span>{t('txt_account_passkey_direct_unlock_mode')}</span>
+            </label>
+            <div className="field-help">
+              {accountPasskeyDirectUnlock ? t('txt_account_passkey_direct_unlock_help') : t('txt_account_passkey_login_only_help')}
+            </div>
+          </div>
+        </div>
+        <div className="actions">
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={masterPasswordPromptSubmitting}
+            onClick={() => openMasterPasswordPrompt('createPasskey')}
+          >
+            <KeyRound size={14} className="btn-icon" />
+            {t('txt_add_account_passkey')}
+          </button>
+        </div>
+        <div className="account-passkeys-list">
+          {accountPasskeysLoading ? (
+            <div className="settings-module-placeholder">
+              <RefreshCw size={20} />
+              <span>{t('txt_loading')}</span>
+            </div>
+          ) : accountPasskeys.length === 0 ? (
+            <div className="settings-module-placeholder">
+              <KeyRound size={20} />
+              <span>{t('txt_no_account_passkeys')}</span>
+            </div>
+          ) : (
+            accountPasskeys.map((credential) => (
+              <div key={credential.id} className="account-passkey-row">
+                <div className="account-passkey-main">
+                  <strong>{credential.name || t('txt_account_passkey')}</strong>
+                  <small>{t('txt_created_value', { value: formatDateTime(credential.creationDate) })}</small>
+                </div>
+                <span className={`account-passkey-status account-passkey-status-${credential.prfStatus}`}>
+                  {accountPasskeyStatusText(credential)}
+                </span>
+                <div className="actions account-passkey-actions">
+                  {credential.prfStatus === 1 && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary small"
+                      disabled={masterPasswordPromptSubmitting}
+                      onClick={() => openMasterPasswordPrompt('enablePasskeyDirectUnlock', credential.id)}
+                    >
+                      <ShieldCheck size={14} className="btn-icon" />
+                      {t('txt_enable_passkey_direct_unlock')}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-danger small"
+                    disabled={masterPasswordPromptSubmitting}
+                    onClick={() => openMasterPasswordPrompt('deletePasskey', credential.id)}
+                  >
+                    <Trash2 size={14} className="btn-icon" />
+                    {t('txt_delete')}
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+      <section className="settings-module sensitive-actions-module">
         <div className="sensitive-actions-grid">
           <div className="sensitive-action">
             <div>

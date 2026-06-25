@@ -209,14 +209,29 @@
 }
 
 .toast-close {
-  @apply cursor-pointer border-0 bg-transparent text-xl;
+  @apply flex cursor-pointer items-center justify-center border-0;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: transparent;
   color: inherit;
-  transition: transform var(--dur-fast) var(--ease-out-soft), opacity var(--dur-fast) var(--ease-smooth);
+  -webkit-tap-highlight-color: transparent;
+  transition: background 120ms ease, opacity 120ms ease;
 }
 
 .toast-close:hover {
-  transform: scale(1.08);
-  opacity: 0.84;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.toast-close:active {
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.toast-close:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
+  border-radius: 8px;
 }
 
 .toast-progress {

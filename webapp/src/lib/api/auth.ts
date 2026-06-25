@@ -1,12 +1,15 @@
 import { bytesToBase64, decryptBw, encryptBw, hkdfExpand, pbkdf2 } from '../crypto';
-import { t } from '../i18n';
+import { t, translateServerError } from '../i18n';
 import type { AuthorizedDevice } from '../types';
 import type {
+  AccountPasskeyCredential,
   Profile,
   SessionState,
   TokenError,
   TokenSuccess,
 } from '../types';
+import type { AccountPasskeyAssertion, AccountPasskeyPrfKeySet } from '../account-passkeys';
+import { recordNodeWardenReachable, recordNodeWardenUnreachable } from '../network-status';
 import { parseJson, type AuthedFetch, type SessionSetter } from './shared';
 
 const SESSION_KEY = 'nodewarden.web.session.v4';
@@ -45,6 +48,8 @@ interface RefreshSuccess {
 }
 
 type RefreshResult = RefreshFailure | RefreshSuccess;
+
+const pendingRefreshes = new Map<string, Promise<RefreshResult>>();
 
 function randomHex(length: number): string {
   const bytes = crypto.getRandomValues(new Uint8Array(Math.max(1, Math.ceil(length / 2))));
@@ -93,6 +98,12 @@ export function loadSession(): SessionState | null {
         authMode: 'web-cookie',
       };
     }
+    if (parsed.authMode === 'token' && parsed.email && !parsed.accessToken && !parsed.refreshToken) {
+      return {
+        email: parsed.email,
+        authMode: 'token',
+      };
+    }
     if (!parsed.accessToken || !parsed.refreshToken || !parsed.email) return null;
     return {
       accessToken: parsed.accessToken,
@@ -134,7 +145,28 @@ export function loadProfileSnapshot(email?: string | null): Profile | null {
 
 export function saveProfileSnapshot(profile: Profile | null): void {
   if (!profile) return;
-  localStorage.setItem(PROFILE_SNAPSHOT_KEY, JSON.stringify(stripProfileSecrets(profile)));
+  const nextSnapshot = stripProfileSecrets(profile);
+  try {
+    const rawExisting = localStorage.getItem(PROFILE_SNAPSHOT_KEY);
+    if (rawExisting) {
+      const existing = stripProfileSecrets(JSON.parse(rawExisting) as Profile);
+      if (
+        existing
+        && existing.email === nextSnapshot?.email
+        && existing.role === 'admin'
+        && nextSnapshot?.role !== 'admin'
+      ) {
+        localStorage.setItem(PROFILE_SNAPSHOT_KEY, JSON.stringify({
+          ...nextSnapshot,
+          role: 'admin',
+        }));
+        return;
+      }
+    }
+  } catch {
+    // Fall back to writing the normalized snapshot below.
+  }
+  localStorage.setItem(PROFILE_SNAPSHOT_KEY, JSON.stringify(nextSnapshot));
 }
 
 export function clearProfileSnapshot(): void {
@@ -210,6 +242,7 @@ export async function loginWithPassword(
     totpCode?: string;
     rememberDevice?: boolean;
     useRememberToken?: boolean;
+    signal?: AbortSignal;
   }
 ): Promise<TokenSuccess | TokenError> {
   const body = new URLSearchParams();
@@ -239,6 +272,7 @@ export async function loginWithPassword(
       [WEB_SESSION_HEADER]: '1',
     },
     body: body.toString(),
+    signal: options?.signal,
   });
   const json = (await parseJson<TokenSuccess & TokenError>(resp)) || {};
   if (resp.ok) {
@@ -246,6 +280,40 @@ export async function loginWithPassword(
   } else if (rememberedToken) {
     clearRememberTwoFactorToken();
   }
+  if (!resp.ok) return json;
+  return json;
+}
+
+export async function getAccountPasskeyAssertionOptions(): Promise<{ options: unknown; token: string }> {
+  const resp = await fetch('/identity/accounts/webauthn/assertion-options');
+  if (!resp.ok) {
+    const json = await parseJson<TokenError>(resp);
+    throw new Error(translateServerError(json?.error_description || json?.error, t('txt_login_failed')));
+  }
+  const body = (await parseJson<{ options?: unknown; token?: string }>(resp)) || {};
+  if (!body.options || !body.token) throw new Error('Invalid passkey assertion options');
+  return { options: body.options, token: body.token };
+}
+
+export async function loginWithAccountPasskeyAssertion(assertion: AccountPasskeyAssertion): Promise<TokenSuccess | TokenError> {
+  const body = new URLSearchParams();
+  body.set('grant_type', 'webauthn');
+  body.set('token', assertion.token);
+  body.set('deviceResponse', JSON.stringify(assertion.deviceResponse));
+  body.set('scope', 'api offline_access');
+  body.set('deviceIdentifier', getOrCreateDeviceIdentifier());
+  body.set('deviceName', guessDeviceName());
+  body.set('deviceType', '14');
+
+  const resp = await fetch('/identity/connect/token', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      [WEB_SESSION_HEADER]: '1',
+    },
+    body: body.toString(),
+  });
+  const json = (await parseJson<TokenSuccess & TokenError>(resp)) || {};
   if (!resp.ok) return json;
   return json;
 }
@@ -274,12 +342,12 @@ export async function refreshAccessToken(session: SessionState): Promise<Refresh
       return {
         ok: false,
         transient: isTransientRefreshStatus(resp.status),
-        error: json?.error_description || json?.error || 'Session refresh failed',
+        error: translateServerError(json?.error_description || json?.error, t('txt_session_refresh_failed')),
       };
     }
     const json = await parseJson<TokenSuccess>(resp);
     if (!json?.access_token) {
-      return { ok: false, transient: false, error: 'Session refresh failed' };
+      return { ok: false, transient: false, error: t('txt_session_refresh_failed') };
     }
     return { ok: true, token: json };
   } catch (error) {
@@ -289,6 +357,25 @@ export async function refreshAccessToken(session: SessionState): Promise<Refresh
       error: error instanceof Error ? error.message : 'Network error',
     };
   }
+}
+
+function refreshKey(session: SessionState): string {
+  if (session.authMode === 'web-cookie') return `web-cookie:${session.email || ''}`;
+  return `token:${session.refreshToken || ''}`;
+}
+
+function refreshAccessTokenOnce(session: SessionState): Promise<RefreshResult> {
+  const key = refreshKey(session);
+  const existing = pendingRefreshes.get(key);
+  if (existing) return existing;
+
+  const request = refreshAccessToken(session).finally(() => {
+    if (pendingRefreshes.get(key) === request) {
+      pendingRefreshes.delete(key);
+    }
+  });
+  pendingRefreshes.set(key, request);
+  return request;
 }
 
 export async function revokeCurrentSession(session: SessionState | null): Promise<void> {
@@ -358,11 +445,11 @@ export async function registerAccount(args: {
 
     if (!resp.ok) {
       const json = await parseJson<TokenError>(resp);
-      return { ok: false, message: json?.error_description || json?.error || 'Register failed' };
+      return { ok: false, message: translateServerError(json?.error_description || json?.error, t('txt_register_failed')) };
     }
     return { ok: true };
   } catch (error) {
-    return { ok: false, message: error instanceof Error ? error.message : 'Register failed' };
+    return { ok: false, message: error instanceof Error ? translateServerError(error.message, error.message) : t('txt_register_failed') };
   }
 }
 
@@ -374,7 +461,7 @@ export async function getPasswordHint(email: string): Promise<{ masterPasswordHi
   });
   if (!resp.ok) {
     const body = await parseJson<TokenError>(resp);
-    throw new Error(body?.error_description || body?.error || 'Failed to load password hint');
+    throw new Error(translateServerError(body?.error_description || body?.error, t('txt_password_hint_load_failed')));
   }
   const body = (await parseJson<{ masterPasswordHint?: string | null }>(resp)) || {};
   return { masterPasswordHint: body.masterPasswordHint ?? null };
@@ -382,35 +469,71 @@ export async function getPasswordHint(email: string): Promise<{ masterPasswordHi
 
 export function createAuthedFetch(getSession: () => SessionState | null, setSession: SessionSetter) {
   return async function authedFetch(input: string, init: RequestInit = {}): Promise<Response> {
+    const retryableRequest = async (headers: Headers): Promise<Response> => {
+      const maxAttempts = 3;
+      let lastError: unknown;
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        try {
+          const response = await fetch(input, { ...init, headers });
+          recordNodeWardenReachable();
+          if (response.status !== 429 && (response.status < 500 || response.status >= 600)) {
+            return response;
+          }
+          lastError = new Error(`HTTP ${response.status}`);
+          if (attempt === maxAttempts - 1) {
+            return response;
+          }
+        } catch (error) {
+          lastError = error;
+          if (attempt === maxAttempts - 1) {
+            recordNodeWardenUnreachable();
+            throw error;
+          }
+        }
+        const delayMs = 250 * (2 ** attempt) + Math.floor(Math.random() * 120);
+        await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+      }
+      throw lastError instanceof Error ? lastError : new Error('Request failed');
+    };
+
     const session = getSession();
-    if (!session?.accessToken) throw new Error('Unauthorized');
+    if (!session?.accessToken) throw new Error(t('txt_offline_vault_readonly'));
     const headers = new Headers(init.headers || {});
     headers.set('Authorization', `Bearer ${session.accessToken}`);
 
-    let resp = await fetch(input, { ...init, headers });
+    let resp = await retryableRequest(headers);
     if (resp.status !== 401 || (!session.refreshToken && session.authMode !== 'web-cookie')) return resp;
 
-    const refreshed = await refreshAccessToken(session);
+    const latest = getSession();
+    if (latest?.accessToken && latest.accessToken !== session.accessToken) {
+      const latestHeaders = new Headers(init.headers || {});
+      latestHeaders.set('Authorization', `Bearer ${latest.accessToken}`);
+      resp = await retryableRequest(latestHeaders);
+      if (resp.status !== 401) return resp;
+    }
+
+    const refreshSource = latest || session;
+    const refreshed = await refreshAccessTokenOnce(refreshSource);
     if (!refreshed.ok) {
       if (refreshed.transient) {
-        throw new Error(refreshed.error || 'Session refresh temporarily unavailable');
+        throw new Error(refreshed.error || t('txt_session_refresh_failed'));
       }
       setSession(null);
-      throw new Error('Session expired');
+      throw new Error(t('txt_session_refresh_failed'));
     }
 
     const nextSession: SessionState = {
-      ...session,
+      ...refreshSource,
       accessToken: refreshed.token.access_token,
-      refreshToken: refreshed.token.refresh_token || session.refreshToken,
-      authMode: refreshed.token.web_session ? 'web-cookie' : (session.authMode || 'token'),
+      refreshToken: refreshed.token.refresh_token || refreshSource.refreshToken,
+      authMode: refreshed.token.web_session ? 'web-cookie' : (refreshSource.authMode || 'token'),
     };
     setSession(nextSession);
     saveSession(nextSession);
 
     const retryHeaders = new Headers(init.headers || {});
     retryHeaders.set('Authorization', `Bearer ${nextSession.accessToken}`);
-    resp = await fetch(input, { ...init, headers: retryHeaders });
+    resp = await retryableRequest(retryHeaders);
     return resp;
   };
 }
@@ -436,7 +559,7 @@ export async function updateProfile(
   });
   if (!resp.ok) {
     const body = await parseJson<TokenError>(resp);
-    throw new Error(body?.error_description || body?.error || 'Save profile failed');
+    throw new Error(translateServerError(body?.error_description || body?.error, t('txt_save_profile_failed')));
   }
   const body = await parseJson<Profile>(resp);
   if (!body) throw new Error('Invalid profile');
@@ -473,14 +596,35 @@ export async function changeMasterPassword(
   const nextEnc = await hkdfExpand(nextMasterKey, 'enc', 32);
   const nextMac = await hkdfExpand(nextMasterKey, 'mac', 32);
   const newKey = await encryptBw(userSym.slice(0, 64), nextEnc, nextMac);
+  const newMasterPasswordHash = bytesToBase64(nextHash);
 
   const resp = await authedFetch('/api/accounts/password', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      currentPasswordHash: current.hash,
-      newMasterPasswordHash: bytesToBase64(nextHash),
-      newKey,
+      masterPasswordHash: current.hash,
+      newMasterPasswordHash,
+      key: newKey,
+      authenticationData: {
+        kdf: {
+          kdfType: 0,
+          iterations: current.kdfIterations,
+          memory: null,
+          parallelism: null,
+        },
+        masterPasswordAuthenticationHash: newMasterPasswordHash,
+        salt: args.email.trim().toLowerCase(),
+      },
+      unlockData: {
+        kdf: {
+          kdfType: 0,
+          iterations: current.kdfIterations,
+          memory: null,
+          parallelism: null,
+        },
+        masterKeyWrappedUserKey: newKey,
+        salt: args.email.trim().toLowerCase(),
+      },
       kdf: 0,
       kdfIterations: current.kdfIterations,
     }),
@@ -499,7 +643,7 @@ export async function setTotp(
   });
   if (!resp.ok) {
     const body = await parseJson<TokenError>(resp);
-    throw new Error(body?.error_description || body?.error || 'TOTP update failed');
+    throw new Error(translateServerError(body?.error_description || body?.error, t('txt_totp_update_failed')));
   }
 }
 
@@ -514,8 +658,150 @@ export async function verifyMasterPassword(
   });
   if (!resp.ok) {
     const body = await parseJson<TokenError>(resp);
-    throw new Error(body?.error_description || body?.error || 'Master password verify failed');
+    throw new Error(translateServerError(body?.error_description || body?.error, t('txt_master_password_verify_failed')));
   }
+}
+
+function normalizeAccountPasskeyCredential(raw: any): AccountPasskeyCredential {
+  return {
+    id: String(raw?.id || raw?.Id || ''),
+    name: String(raw?.name || raw?.Name || ''),
+    prfStatus: Number(raw?.prfStatus ?? raw?.PrfStatus ?? 2) as 0 | 1 | 2,
+    encryptedPublicKey: raw?.encryptedPublicKey ?? raw?.EncryptedPublicKey ?? null,
+    encryptedUserKey: raw?.encryptedUserKey ?? raw?.EncryptedUserKey ?? null,
+    creationDate: raw?.creationDate ?? raw?.CreationDate,
+    revisionDate: raw?.revisionDate ?? raw?.RevisionDate,
+  };
+}
+
+export async function listAccountPasskeys(authedFetch: AuthedFetch): Promise<AccountPasskeyCredential[]> {
+  const resp = await authedFetch('/api/webauthn');
+  if (!resp.ok) throw new Error('Failed to load account passkeys');
+  const body = (await parseJson<{ data?: unknown[]; Data?: unknown[] }>(resp)) || {};
+  const rows = Array.isArray(body.data) ? body.data : Array.isArray(body.Data) ? body.Data : [];
+  return rows.map(normalizeAccountPasskeyCredential).filter((item) => item.id);
+}
+
+export async function getAccountPasskeyAttestationOptions(
+  authedFetch: AuthedFetch,
+  masterPasswordHash: string
+): Promise<{ options: unknown; token: string }> {
+  const resp = await authedFetch('/api/webauthn/attestation-options', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ masterPasswordHash }),
+  });
+  if (!resp.ok) {
+    const body = await parseJson<TokenError>(resp);
+    throw new Error(translateServerError(body?.error_description || body?.error, t('txt_master_password_verify_failed')));
+  }
+  const body = (await parseJson<{ options?: unknown; token?: string }>(resp)) || {};
+  if (!body.options || !body.token) throw new Error('Invalid passkey creation options');
+  return { options: body.options, token: body.token };
+}
+
+export async function getAccountPasskeyUpdateAssertionOptions(
+  authedFetch: AuthedFetch,
+  masterPasswordHash: string,
+  credentialId?: string
+): Promise<{ options: unknown; token: string }> {
+  const resp = await authedFetch('/api/webauthn/assertion-options', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ masterPasswordHash, credentialId }),
+  });
+  if (!resp.ok) {
+    const body = await parseJson<TokenError>(resp);
+    throw new Error(translateServerError(body?.error_description || body?.error, t('txt_master_password_verify_failed')));
+  }
+  const body = (await parseJson<{ options?: unknown; token?: string }>(resp)) || {};
+  if (!body.options || !body.token) throw new Error('Invalid passkey assertion options');
+  return { options: body.options, token: body.token };
+}
+
+export async function saveAccountPasskey(
+  authedFetch: AuthedFetch,
+  payload: {
+    name: string;
+    token: string;
+    deviceResponse: unknown;
+    supportsPrf: boolean;
+    keySet?: AccountPasskeyPrfKeySet | null;
+  }
+): Promise<AccountPasskeyCredential> {
+  const resp = await authedFetch('/api/webauthn', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: payload.name,
+      token: payload.token,
+      deviceResponse: payload.deviceResponse,
+      supportsPrf: payload.supportsPrf,
+      encryptedUserKey: payload.keySet?.encryptedUserKey,
+      encryptedPublicKey: payload.keySet?.encryptedPublicKey,
+      encryptedPrivateKey: payload.keySet?.encryptedPrivateKey,
+    }),
+  });
+  if (!resp.ok) {
+    const body = await parseJson<TokenError>(resp);
+    throw new Error(translateServerError(body?.error_description || body?.error, t('txt_save_profile_failed')));
+  }
+  const body = await parseJson<unknown>(resp);
+  return normalizeAccountPasskeyCredential(body);
+}
+
+export async function enableAccountPasskeyDirectUnlock(
+  authedFetch: AuthedFetch,
+  payload: {
+    token: string;
+    deviceResponse: unknown;
+    keySet: AccountPasskeyPrfKeySet;
+  }
+): Promise<void> {
+  const resp = await authedFetch('/api/webauthn', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      token: payload.token,
+      deviceResponse: payload.deviceResponse,
+      encryptedUserKey: payload.keySet.encryptedUserKey,
+      encryptedPublicKey: payload.keySet.encryptedPublicKey,
+      encryptedPrivateKey: payload.keySet.encryptedPrivateKey,
+    }),
+  });
+  if (!resp.ok) {
+    const body = await parseJson<TokenError>(resp);
+    throw new Error(translateServerError(body?.error_description || body?.error, t('txt_save_profile_failed')));
+  }
+}
+
+export async function deleteAccountPasskey(
+  authedFetch: AuthedFetch,
+  id: string,
+  masterPasswordHash: string
+): Promise<void> {
+  const resp = await authedFetch(`/api/webauthn/${encodeURIComponent(id)}/delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ masterPasswordHash }),
+  });
+  if (!resp.ok) {
+    const body = await parseJson<TokenError>(resp);
+    throw new Error(translateServerError(body?.error_description || body?.error, t('txt_delete_item_failed')));
+  }
+}
+
+export async function getVaultRevisionDate(authedFetch: AuthedFetch): Promise<number> {
+  const resp = await authedFetch('/api/accounts/revision-date');
+  if (!resp.ok) {
+    throw new Error('Failed to load revision date');
+  }
+  const body = await parseJson<number>(resp);
+  const stamp = Number(body);
+  if (!Number.isFinite(stamp) || stamp <= 0) {
+    throw new Error('Invalid revision date');
+  }
+  return stamp;
 }
 
 export async function getTotpStatus(authedFetch: AuthedFetch): Promise<{ enabled: boolean }> {
@@ -536,7 +822,7 @@ export async function getTotpRecoveryCode(
   });
   if (!resp.ok) {
     const body = await parseJson<TokenError>(resp);
-    throw new Error(body?.error_description || body?.error || 'Failed to get recovery code');
+    throw new Error(translateServerError(body?.error_description || body?.error, t('txt_get_recovery_code_failed')));
   }
   const body = (await parseJson<{ code?: string }>(resp)) || {};
   return String(body.code || '');
@@ -558,7 +844,7 @@ export async function recoverTwoFactor(
   });
   if (!resp.ok) {
     const body = await parseJson<TokenError>(resp);
-    throw new Error(body?.error_description || body?.error || 'Recover 2FA failed');
+    throw new Error(translateServerError(body?.error_description || body?.error, t('txt_recover_2fa_failed')));
   }
   return (await parseJson<{ newRecoveryCode?: string }>(resp)) || {};
 }
@@ -576,6 +862,14 @@ export async function revokeAuthorizedDeviceTrust(
 ): Promise<void> {
   const resp = await authedFetch(`/api/devices/authorized/${encodeURIComponent(deviceIdentifier)}`, { method: 'DELETE' });
   if (!resp.ok) throw new Error(t('txt_revoke_device_trust_failed'));
+}
+
+export async function trustAuthorizedDevicePermanently(
+  authedFetch: AuthedFetch,
+  deviceIdentifier: string
+): Promise<void> {
+  const resp = await authedFetch(`/api/devices/authorized/${encodeURIComponent(deviceIdentifier)}/permanent`, { method: 'POST' });
+  if (!resp.ok) throw new Error(t('txt_trust_device_permanently_failed'));
 }
 
 export async function revokeAllAuthorizedDeviceTrust(authedFetch: AuthedFetch): Promise<void> {
@@ -619,7 +913,7 @@ export async function getApiKey(authedFetch: AuthedFetch, masterPasswordHash: st
   });
   if (!resp.ok) {
     const body = await parseJson<TokenError>(resp);
-    throw new Error(body?.error_description || body?.error || 'Failed to get API key');
+    throw new Error(translateServerError(body?.error_description || body?.error, t('txt_get_api_key_failed')));
   }
   const body = (await parseJson<{ apiKey?: string }>(resp)) || {};
   return String(body.apiKey || '');
@@ -633,7 +927,7 @@ export async function rotateApiKey(authedFetch: AuthedFetch, masterPasswordHash:
   });
   if (!resp.ok) {
     const body = await parseJson<TokenError>(resp);
-    throw new Error(body?.error_description || body?.error || 'Failed to rotate API key');
+    throw new Error(translateServerError(body?.error_description || body?.error, t('txt_rotate_api_key_failed')));
   }
   const body = (await parseJson<{ apiKey?: string }>(resp)) || {};
   return String(body.apiKey || '');

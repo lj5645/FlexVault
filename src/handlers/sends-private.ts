@@ -16,6 +16,9 @@ import {
   formatSize,
   getAliasedProp,
   normalizeEmails,
+  notifySendCreateForRequest,
+  notifySendDeleteForRequest,
+  notifySendUpdateForRequest,
   notifyVaultSyncForRequest,
   parseDate,
   parseFileLength,
@@ -29,6 +32,28 @@ import {
   setSendPassword,
   validateDeletionDate,
 } from './sends-shared';
+import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
+
+async function writeSendAudit(
+  storage: StorageService,
+  request: Request,
+  userId: string,
+  action: string,
+  metadata: Record<string, unknown>
+): Promise<void> {
+  await writeAuditEvent(storage, {
+    actorUserId: userId,
+    action,
+    category: 'data',
+    level: action.includes('delete') ? 'security' : 'info',
+    targetType: 'send',
+    targetId: typeof metadata.id === 'string' ? metadata.id : null,
+    metadata: {
+      ...metadata,
+      ...auditRequestMetadata(request),
+    },
+  });
+}
 
 async function processSendFileUpload(
   request: Request,
@@ -76,7 +101,8 @@ async function processSendFileUpload(
 
   const storage = new StorageService(env.DB);
   const revisionDate = await storage.updateRevisionDate(send.userId);
-  await notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
+  notifyVaultSyncForRequest(request, env, send.userId, revisionDate);
+  notifySendUpdateForRequest(request, env, send.id, send.userId, revisionDate);
 
   return new Response(null, { status: 201 });
 }
@@ -226,7 +252,8 @@ export async function handleCreateSend(request: Request, env: Env, userId: strin
 
   await storage.saveSend(send);
   const revisionDate = await storage.updateRevisionDate(userId);
-  await notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  notifySendCreateForRequest(request, env, send.id, userId, revisionDate);
 
   return jsonResponse(sendToResponse(send));
 }
@@ -349,7 +376,8 @@ export async function handleCreateFileSendV2(request: Request, env: Env, userId:
 
   await storage.saveSend(send);
   const revisionDate = await storage.updateRevisionDate(userId);
-  await notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  notifySendCreateForRequest(request, env, send.id, userId, revisionDate);
   const jwtSecret = getSafeJwtSecret(env);
   if (!jwtSecret) {
     return errorResponse('Server configuration error', 500);
@@ -596,13 +624,13 @@ export async function handleUpdateSend(request: Request, env: Env, userId: strin
   send.updatedAt = new Date().toISOString();
   await storage.saveSend(send);
   const revisionDate = await storage.updateRevisionDate(userId);
-  await notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  notifySendUpdateForRequest(request, env, send.id, userId, revisionDate);
 
   return jsonResponse(sendToResponse(send));
 }
 
 export async function handleDeleteSend(request: Request, env: Env, userId: string, sendId: string): Promise<Response> {
-  void request;
   const storage = new StorageService(env.DB);
   const send = await storage.getSend(sendId);
   if (!send || send.userId !== userId) {
@@ -619,7 +647,12 @@ export async function handleDeleteSend(request: Request, env: Env, userId: strin
 
   await storage.deleteSend(sendId, userId);
   const revisionDate = await storage.updateRevisionDate(userId);
-  await notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  notifySendDeleteForRequest(request, env, sendId, userId, revisionDate);
+  await writeSendAudit(storage, request, userId, 'send.delete', {
+    id: sendId,
+    type: send.type,
+  });
 
   return new Response(null, { status: 200 });
 }
@@ -650,14 +683,20 @@ export async function handleBulkDeleteSends(request: Request, env: Env, userId: 
 
   const revisionDate = await storage.bulkDeleteSends(body.ids, userId);
   if (revisionDate) {
-    await notifyVaultSyncForRequest(request, env, userId, revisionDate);
+    notifyVaultSyncForRequest(request, env, userId, revisionDate);
+    for (const send of sends) {
+      notifySendDeleteForRequest(request, env, send.id, userId, revisionDate);
+    }
+    await writeSendAudit(storage, request, userId, 'send.delete.bulk', {
+      count: sends.length,
+      requestedCount: body.ids.length,
+    });
   }
 
   return new Response(null, { status: 200 });
 }
 
 export async function handleRemoveSendPassword(request: Request, env: Env, userId: string, sendId: string): Promise<Response> {
-  void request;
   const storage = new StorageService(env.DB);
   const send = await storage.getSend(sendId);
   if (!send || send.userId !== userId) {
@@ -668,13 +707,17 @@ export async function handleRemoveSendPassword(request: Request, env: Env, userI
   send.updatedAt = new Date().toISOString();
   await storage.saveSend(send);
   const revisionDate = await storage.updateRevisionDate(userId);
-  await notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  notifySendUpdateForRequest(request, env, send.id, userId, revisionDate);
+  await writeSendAudit(storage, request, userId, 'send.password.remove', {
+    id: send.id,
+    type: send.type,
+  });
 
   return jsonResponse(sendToResponse(send));
 }
 
 export async function handleRemoveSendAuth(request: Request, env: Env, userId: string, sendId: string): Promise<Response> {
-  void request;
   const storage = new StorageService(env.DB);
   const send = await storage.getSend(sendId);
   if (!send || send.userId !== userId) {
@@ -686,7 +729,12 @@ export async function handleRemoveSendAuth(request: Request, env: Env, userId: s
   send.updatedAt = new Date().toISOString();
   await storage.saveSend(send);
   const revisionDate = await storage.updateRevisionDate(userId);
-  await notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  notifyVaultSyncForRequest(request, env, userId, revisionDate);
+  notifySendUpdateForRequest(request, env, send.id, userId, revisionDate);
+  await writeSendAudit(storage, request, userId, 'send.auth.remove', {
+    id: send.id,
+    type: send.type,
+  });
 
   return jsonResponse(sendToResponse(send));
 }

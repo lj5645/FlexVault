@@ -1,8 +1,9 @@
 import { Env, User, Invite } from '../types';
+import { AuthService } from '../services/auth';
 import { StorageService } from '../services/storage';
 import { jsonResponse, errorResponse } from '../utils/response';
-import { generateUUID } from '../utils/uuid';
 import { deleteBlobObject, getAttachmentObjectKey, getSendFileObjectKey } from '../services/blob-store';
+import { auditRequestMetadata, getAuditLogSettings, normalizeAuditLogSettings, saveAuditLogSettings, writeAuditEvent } from '../services/audit-events';
 
 function isAdmin(user: User): boolean {
   return user.role === 'admin' && user.status === 'active';
@@ -24,16 +25,20 @@ async function writeAuditLog(
   action: string,
   targetType: string | null,
   targetId: string | null,
-  metadata: Record<string, unknown> | null
+  metadata: Record<string, unknown> | null,
+  request?: Request
 ): Promise<void> {
-  await storage.createAuditLog({
-    id: generateUUID(),
+  await writeAuditEvent(storage, {
     actorUserId,
     action,
     targetType,
     targetId,
-    metadata: metadata ? JSON.stringify(metadata) : null,
-    createdAt: new Date().toISOString(),
+    category: action.startsWith('admin.user.') ? 'security' : 'system',
+    level: action.startsWith('admin.user.') ? 'security' : 'info',
+    metadata: {
+      ...(metadata || {}),
+      ...(request ? auditRequestMetadata(request) : {}),
+    },
   });
 }
 
@@ -81,6 +86,106 @@ export async function handleAdminListUsers(
   });
 }
 
+// GET /api/admin/logs
+export async function handleAdminListAuditLogs(
+  request: Request,
+  env: Env,
+  actorUser: User
+): Promise<Response> {
+  if (!isAdmin(actorUser)) {
+    return errorResponse('Forbidden', 403);
+  }
+
+  const url = new URL(request.url);
+  const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') || 50)));
+  const offset = Math.max(0, Number(url.searchParams.get('offset') || 0));
+  const category = String(url.searchParams.get('category') || '').trim() || null;
+  const level = String(url.searchParams.get('level') || '').trim() || null;
+  const q = String(url.searchParams.get('q') || '').trim().toLowerCase() || null;
+  const from = String(url.searchParams.get('from') || '').trim() || null;
+  const to = String(url.searchParams.get('to') || '').trim() || null;
+
+  const storage = new StorageService(env.DB);
+  const result = await storage.listAuditLogs({ limit, offset, category, level, q, from, to });
+  return jsonResponse({
+    data: result.logs.map(log => ({
+      id: log.id,
+      actorUserId: log.actorUserId,
+      actorEmail: log.actorEmail,
+      action: log.action,
+      category: log.category,
+      level: log.level,
+      targetType: log.targetType,
+      targetId: log.targetId,
+      targetUserEmail: log.targetUserEmail,
+      metadata: log.metadata,
+      createdAt: log.createdAt,
+      object: 'auditLog',
+    })),
+    total: result.total,
+    limit,
+    offset,
+    hasMore: result.hasMore,
+    object: 'list',
+    continuationToken: result.hasMore ? String(offset + result.logs.length) : null,
+  });
+}
+
+// GET /api/admin/logs/settings
+export async function handleAdminGetAuditLogSettings(
+  request: Request,
+  env: Env,
+  actorUser: User
+): Promise<Response> {
+  void request;
+  if (!isAdmin(actorUser)) {
+    return errorResponse('Forbidden', 403);
+  }
+  const storage = new StorageService(env.DB);
+  return jsonResponse({
+    object: 'auditLogSettings',
+    ...await getAuditLogSettings(storage),
+  });
+}
+
+// PUT /api/admin/logs/settings
+export async function handleAdminUpdateAuditLogSettings(
+  request: Request,
+  env: Env,
+  actorUser: User
+): Promise<Response> {
+  if (!isAdmin(actorUser)) {
+    return errorResponse('Forbidden', 403);
+  }
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+  const storage = new StorageService(env.DB);
+  const settings = await saveAuditLogSettings(storage, normalizeAuditLogSettings(body));
+  await writeAuditLog(storage, actorUser.id, 'admin.audit.settings.update', 'auditLog', null, { ...settings }, request);
+  return jsonResponse({
+    object: 'auditLogSettings',
+    ...settings,
+  });
+}
+
+// DELETE /api/admin/logs
+export async function handleAdminClearAuditLogs(
+  request: Request,
+  env: Env,
+  actorUser: User
+): Promise<Response> {
+  if (!isAdmin(actorUser)) {
+    return errorResponse('Forbidden', 403);
+  }
+  const storage = new StorageService(env.DB);
+  const deleted = await storage.clearAuditLogs();
+  return jsonResponse({ object: 'auditLogClear', deleted });
+}
+
 // POST /api/admin/invites
 export async function handleAdminCreateInvite(
   request: Request,
@@ -115,9 +220,9 @@ export async function handleAdminCreateInvite(
   };
 
   await storage.createInvite(invite);
-  await writeAuditLog(storage, actorUser.id, 'admin.invite.create', 'invite', invite.code, {
+  await writeAuditLog(storage, actorUser.id, 'admin.invite.create', 'invite', null, {
     expiresInHours,
-  });
+  }, request);
 
   return jsonResponse(toInviteResponse(request, invite), 201);
 }
@@ -160,7 +265,7 @@ export async function handleAdminRevokeInvite(
     return errorResponse('Invite not found or already inactive', 404);
   }
 
-  await writeAuditLog(storage, actorUser.id, 'admin.invite.revoke', 'invite', code, null);
+  await writeAuditLog(storage, actorUser.id, 'admin.invite.revoke', 'invite', null, null, request);
   return new Response(null, { status: 204 });
 }
 
@@ -179,7 +284,7 @@ export async function handleAdminDeleteAllInvites(
   const deleted = await storage.deleteAllInvites();
   await writeAuditLog(storage, actorUser.id, 'admin.invite.delete_all', 'invite', null, {
     deleted,
-  });
+  }, request);
 
   return jsonResponse({ deleted }, 200);
 }
@@ -222,9 +327,10 @@ export async function handleAdminSetUserStatus(
   if (nextStatus === 'banned') {
     await storage.deleteRefreshTokensByUserId(target.id);
   }
+  AuthService.invalidateUserCache(target.id);
   await writeAuditLog(storage, actorUser.id, 'admin.user.status', 'user', target.id, {
     status: nextStatus,
-  });
+  }, request);
 
   return jsonResponse({
     id: target.id,
@@ -280,9 +386,10 @@ export async function handleAdminDeleteUser(
 
   await storage.deleteRefreshTokensByUserId(target.id);
   await storage.deleteUserById(target.id);
+  AuthService.invalidateUserCache(target.id);
   await writeAuditLog(storage, actorUser.id, 'admin.user.delete', 'user', target.id, {
-    email: target.email,
-  });
+    targetEmail: target.email,
+  }, request);
 
   return new Response(null, { status: 204 });
 }

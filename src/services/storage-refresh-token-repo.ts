@@ -28,13 +28,6 @@ export async function getRefreshTokenRecord(
   db: D1Database,
   refreshTokenKey: RefreshTokenKeyFn,
   maybeCleanupExpiredRefreshTokens: CleanupExpiredFn,
-  saveRefreshTokenRecord: (
-    token: string,
-    userId: string,
-    expiresAtMs?: number,
-    deviceIdentifier?: string | null,
-    deviceSessionStamp?: string | null
-  ) => Promise<void>,
   deleteRefreshTokenRecord: (token: string) => Promise<void>,
   token: string
 ): Promise<RefreshTokenRecord | null> {
@@ -42,38 +35,10 @@ export async function getRefreshTokenRecord(
   await maybeCleanupExpiredRefreshTokens(now);
   const tokenKey = await refreshTokenKey(token);
 
-  let row = await db
+  const row = await db
     .prepare('SELECT user_id, expires_at, device_identifier, device_session_stamp FROM refresh_tokens WHERE token = ?')
     .bind(tokenKey)
     .first<{ user_id: string; expires_at: number; device_identifier: string | null; device_session_stamp: string | null }>();
-
-  if (!row) {
-    const legacyRow = await db
-      .prepare('SELECT user_id, expires_at, device_identifier, device_session_stamp FROM refresh_tokens WHERE token = ?')
-      .bind(token)
-      .first<{ user_id: string; expires_at: number; device_identifier: string | null; device_session_stamp: string | null }>();
-
-    if (legacyRow) {
-      if (legacyRow.expires_at && legacyRow.expires_at < now) {
-        await deleteRefreshTokenRecord(token);
-        return null;
-      }
-      await saveRefreshTokenRecord(
-        token,
-        legacyRow.user_id,
-        legacyRow.expires_at,
-        legacyRow.device_identifier ?? null,
-        legacyRow.device_session_stamp ?? null
-      );
-      await db.prepare('DELETE FROM refresh_tokens WHERE token = ?').bind(token).run();
-      return {
-        userId: legacyRow.user_id,
-        expiresAt: legacyRow.expires_at,
-        deviceIdentifier: legacyRow.device_identifier ?? null,
-        deviceSessionStamp: legacyRow.device_session_stamp ?? null,
-      };
-    }
-  }
 
   if (!row) return null;
   if (row.expires_at && row.expires_at < now) {

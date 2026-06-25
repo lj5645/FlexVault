@@ -60,8 +60,8 @@ export function BackupDestinationSidebar(props: BackupDestinationSidebarProps) {
           <button type="button" className="btn btn-secondary small" onClick={() => props.onAddDestination('webdav')}>
             {t('txt_backup_protocol_webdav')}
           </button>
-          <button type="button" className="btn btn-secondary small" onClick={() => props.onAddDestination('e3')}>
-            {t('txt_backup_protocol_e3')}
+          <button type="button" className="btn btn-secondary small" onClick={() => props.onAddDestination('s3')}>
+            {t('txt_backup_protocol_s3')}
           </button>
         </div>
       ) : null}

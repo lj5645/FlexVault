@@ -12,6 +12,7 @@ export interface AppConfirmState {
   cancelText?: string;
   hideCancel?: boolean;
   onConfirm: () => void;
+  onCancel?: () => void;
 }
 
 interface AppGlobalOverlaysProps {
@@ -49,7 +50,7 @@ export default function AppGlobalOverlays(props: AppGlobalOverlaysProps) {
         cancelText={props.confirm?.cancelText}
         hideCancel={props.confirm?.hideCancel}
         onConfirm={() => props.confirm?.onConfirm()}
-        onCancel={props.onCancelConfirm}
+        onCancel={props.confirm?.onCancel || props.onCancelConfirm}
       />
 
       <ConfirmDialog

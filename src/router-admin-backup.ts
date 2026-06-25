@@ -50,7 +50,7 @@ export async function handleAdminBackupRoute(
     return handleListAdminRemoteBackups(request, env, actorUser);
   }
 
-  if (path === '/api/admin/backup/remote/download' && method === 'GET') {
+  if (path === '/api/admin/backup/remote/download' && method === 'POST') {
     return handleDownloadAdminRemoteBackup(request, env, actorUser);
   }
 

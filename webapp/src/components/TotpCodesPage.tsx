@@ -1,27 +1,12 @@
-import type { JSX } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { Clipboard, Globe, GripVertical } from 'lucide-preact';
-import {
-  closestCenter,
-  DndContext,
-  type DragEndEvent,
-  PointerSensor,
-  TouchSensor,
-  useSensor,
-  useSensors,
-} from '@dnd-kit/core';
-import {
-  arrayMove,
-  rectSortingStrategy,
-  SortableContext,
-  useSortable,
-} from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
+import { Clipboard, Globe } from 'lucide-preact';
 import { copyTextToClipboard as copyTextWithFeedback } from '@/lib/clipboard';
 import { calcTotpNow } from '@/lib/crypto';
 import { t } from '@/lib/i18n';
 import type { Cipher } from '@/lib/types';
-import { isCipherVisibleInNormalVault, websiteIconUrl } from '@/components/vault/vault-page-helpers';
+import LoadingState from '@/components/LoadingState';
+import WebsiteIcon from '@/components/vault/WebsiteIcon';
+import { formatTotp, isCipherVisibleInNormalVault } from '@/components/vault/vault-page-helpers';
 
 interface TotpCodesPageProps {
   ciphers: Cipher[];
@@ -32,9 +17,7 @@ interface TotpCodesPageProps {
 const TOTP_PERIOD_SECONDS = 30;
 const TOTP_RING_RADIUS = 14;
 const TOTP_RING_CIRCUMFERENCE = 2 * Math.PI * TOTP_RING_RADIUS;
-const TOTP_ORDER_STORAGE_KEY = 'nodewarden.totp-order';
-const failedIconHosts = new Set<string>();
-
+const TOTP_REFRESH_BATCH_SIZE = 16;
 function getTotpTimeState(): { windowId: number; remain: number } {
   const epoch = Math.floor(Date.now() / 1000);
   return {
@@ -43,113 +26,22 @@ function getTotpTimeState(): { windowId: number; remain: number } {
   };
 }
 
-function formatTotp(code: string): string {
-  if (!code) return code;
-  if (code.length === 5) return `${code.slice(0, 2)} ${code.slice(2)}`;
-  if (code.length < 6) return code;
-  return `${code.slice(0, 3)} ${code.slice(3, 6)}`;
-}
-
-function firstCipherUri(cipher: Cipher): string {
-  const uris = cipher.login?.uris || [];
-  for (const uri of uris) {
-    const raw = uri.decUri || uri.uri || '';
-    if (raw.trim()) return raw.trim();
-  }
-  return '';
-}
-
-function hostFromUri(uri: string): string {
-  if (!uri.trim()) return '';
-  try {
-    const normalized = /^https?:\/\//i.test(uri) ? uri : `https://${uri}`;
-    return new URL(normalized).hostname || '';
-  } catch {
-    return '';
-  }
-}
-
 function TotpListIcon({ cipher }: { cipher: Cipher }) {
-  const uri = firstCipherUri(cipher);
-  const host = hostFromUri(uri);
-  const [errored, setErrored] = useState(() => (host ? failedIconHosts.has(host) : false));
-  const [loaded, setLoaded] = useState(false);
-  const markIconError = () => {
-    if (host) failedIconHosts.add(host);
-    setErrored(true);
-  };
-  const syncCachedIconState = (img: HTMLImageElement | null) => {
-    if (!img || !img.complete) return;
-    if (img.naturalWidth > 0) {
-      setLoaded(true);
-      return;
-    }
-    markIconError();
-  };
-  useEffect(() => {
-    setErrored(host ? failedIconHosts.has(host) : false);
-    setLoaded(false);
-  }, [host]);
-
-  if (host && !errored) {
-    return (
-      <span className="list-icon-stack">
-        <span className={`list-icon-fallback ${loaded ? 'hidden' : ''}`}>
-          <Globe size={18} />
-        </span>
-        <img
-          className={`list-icon ${loaded ? 'loaded' : ''}`}
-          src={websiteIconUrl(host)}
-          alt=""
-          loading="lazy"
-          referrerPolicy="no-referrer"
-          ref={syncCachedIconState}
-          onLoad={() => setLoaded(true)}
-          onError={markIconError}
-        />
-      </span>
-    );
-  }
-  return (
-    <span className="list-icon-fallback">
-      <Globe size={18} />
-    </span>
-  );
+  return <WebsiteIcon cipher={cipher} fallback={<Globe size={18} />} />;
 }
 
-interface SortableTotpRowProps {
+interface TotpRowProps {
   cipher: Cipher;
   live: { code: string; remain: number } | null;
   onCopy: (value: string) => void;
 }
 
-function SortableTotpRow(props: SortableTotpRowProps) {
-  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: props.cipher.id,
-  });
-  const dragButtonAttributes = attributes as JSX.HTMLAttributes<HTMLButtonElement>;
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-  };
-
+function TotpRow(props: TotpRowProps) {
   const name = props.cipher.decName || props.cipher.name || t('txt_no_name');
   const username = props.cipher.login?.decUsername || '';
 
   return (
-    <div ref={setNodeRef} style={style} className={`totp-code-row${isDragging ? ' is-dragging' : ''}`}>
-      <button
-        type="button"
-        ref={setActivatorNodeRef}
-        className="btn btn-secondary small totp-drag-btn"
-        title={t('txt_drag_to_reorder')}
-        aria-label={t('txt_drag_to_reorder')}
-        {...dragButtonAttributes}
-        {...listeners}
-      >
-        <GripVertical size={14} className="btn-icon" />
-      </button>
+    <div className="totp-code-row">
       <div className="totp-code-info">
         <div className="list-icon-wrap">
           <TotpListIcon cipher={props.cipher} />
@@ -197,84 +89,28 @@ export default function TotpCodesPage(props: TotpCodesPageProps) {
   const [totpCodes, setTotpCodes] = useState<Record<string, string | null>>({});
   const [remainingSeconds, setRemainingSeconds] = useState(() => getTotpTimeState().remain);
   const [columnCount, setColumnCount] = useState(1);
-  const [orderedIds, setOrderedIds] = useState<string[]>(() => {
-    if (typeof window === 'undefined') return [];
-    try {
-      const parsed = JSON.parse(String(window.localStorage.getItem(TOTP_ORDER_STORAGE_KEY) || '[]'));
-      return Array.isArray(parsed) ? parsed.map((id) => String(id || '').trim()).filter(Boolean) : [];
-    } catch {
-      return [];
-    }
-  });
   const listRef = useRef<HTMLDivElement | null>(null);
-  const hasLoadedTotpItemsRef = useRef(false);
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 6,
-      },
-    }),
-    useSensor(TouchSensor, {
-      activationConstraint: {
-        delay: 120,
-        tolerance: 8,
-      },
-    }),
-  );
 
   async function copyToClipboard(value: string): Promise<void> {
     await copyTextWithFeedback(value, { successMessage: t('txt_code_copied') });
   }
 
-  const baseTotpItems = useMemo(
+  const nameCollator = useMemo(
+    () => new Intl.Collator(undefined, { sensitivity: 'base', numeric: true }),
+    []
+  );
+
+  const totpItems = useMemo(
     () =>
       props.ciphers
         .filter((cipher) => isCipherVisibleInNormalVault(cipher) && !!cipher.login?.decTotp)
         .sort((a, b) => {
-          const nameA = (a.decName || a.name || '').trim().toLowerCase();
-          const nameB = (b.decName || b.name || '').trim().toLowerCase();
-          return nameA.localeCompare(nameB);
+          const nameA = (a.decName || a.name || '').trim();
+          const nameB = (b.decName || b.name || '').trim();
+          return nameCollator.compare(nameA, nameB);
         }),
-    [props.ciphers]
+    [props.ciphers, nameCollator]
   );
-
-  const totpItems = useMemo(() => {
-    if (!baseTotpItems.length) return [];
-    const orderMap = new Map(orderedIds.map((id, index) => [id, index]));
-    return [...baseTotpItems].sort((a, b) => {
-      const orderA = orderMap.get(a.id);
-      const orderB = orderMap.get(b.id);
-      if (orderA != null && orderB != null) return orderA - orderB;
-      if (orderA != null) return -1;
-      if (orderB != null) return 1;
-      const nameA = (a.decName || a.name || '').trim().toLowerCase();
-      const nameB = (b.decName || b.name || '').trim().toLowerCase();
-      return nameA.localeCompare(nameB);
-    });
-  }, [baseTotpItems, orderedIds]);
-
-  useEffect(() => {
-    if (!baseTotpItems.length) return;
-    hasLoadedTotpItemsRef.current = true;
-    const validIds = new Set(baseTotpItems.map((cipher) => cipher.id));
-    setOrderedIds((prev) => {
-      const filtered = prev.filter((id) => validIds.has(id));
-      const missing = baseTotpItems.map((cipher) => cipher.id).filter((id) => !filtered.includes(id));
-      const next = [...filtered, ...missing];
-      if (next.length === prev.length && next.every((id, index) => id === prev[index])) return prev;
-      return next;
-    });
-  }, [baseTotpItems]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (!hasLoadedTotpItemsRef.current) return;
-    try {
-      window.localStorage.setItem(TOTP_ORDER_STORAGE_KEY, JSON.stringify(orderedIds));
-    } catch {
-      // ignore storage write failures
-    }
-  }, [orderedIds]);
 
   useEffect(() => {
     if (!totpItems.length) {
@@ -288,17 +124,41 @@ export default function TotpCodesPage(props: TotpCodesPageProps) {
 
     const refreshCodes = async () => {
       const runId = ++activeRun;
-      const entries = await Promise.all(
-        totpItems.map(async (cipher) => {
-          try {
-            const next = await calcTotpNow(cipher.login?.decTotp || '');
-            return [cipher.id, next?.code || null] as const;
-          } catch {
-            return [cipher.id, null] as const;
-          }
-        })
-      );
-      if (!stopped && runId === activeRun) setTotpCodes(Object.fromEntries(entries));
+      const nextCodes: Record<string, string | null> = {};
+      for (let start = 0; start < totpItems.length; start += TOTP_REFRESH_BATCH_SIZE) {
+        if (stopped || runId !== activeRun) return;
+        const batch = totpItems.slice(start, start + TOTP_REFRESH_BATCH_SIZE);
+        const entries = await Promise.all(
+          batch.map(async (cipher) => {
+            try {
+              const next = await calcTotpNow(cipher.login?.decTotp || '');
+              return [cipher.id, next?.code || null] as const;
+            } catch {
+              return [cipher.id, null] as const;
+            }
+          })
+        );
+        for (const [id, code] of entries) nextCodes[id] = code;
+        if (start + TOTP_REFRESH_BATCH_SIZE < totpItems.length) {
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+        }
+      }
+      if (stopped || runId !== activeRun) return;
+      setTotpCodes((prev) => {
+        let changed = false;
+        const next: Record<string, string | null> = { ...prev };
+        for (const id of Object.keys(next)) {
+          if (id in nextCodes) continue;
+          delete next[id];
+          changed = true;
+        }
+        for (const [id, code] of Object.entries(nextCodes)) {
+          if (next[id] === code) continue;
+          next[id] = code;
+          changed = true;
+        }
+        return changed ? next : prev;
+      });
     };
 
     const tick = () => {
@@ -338,16 +198,6 @@ export default function TotpCodesPage(props: TotpCodesPageProps) {
     return () => observer.disconnect();
   }, []);
 
-  const handleDragEnd = (event: DragEndEvent) => {
-    const activeId = String(event.active.id);
-    const overId = event.over ? String(event.over.id) : null;
-    if (!overId || activeId === overId) return;
-    const fromIndex = orderedIds.indexOf(activeId);
-    const toIndex = orderedIds.indexOf(overId);
-    if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) return;
-    setOrderedIds((prev) => arrayMove(prev, fromIndex, toIndex));
-  };
-
   return (
     <div className="totp-codes-page">
       <div className="card">
@@ -359,19 +209,16 @@ export default function TotpCodesPage(props: TotpCodesPageProps) {
           className="totp-codes-list"
           style={{ '--totp-columns': String(columnCount) } as Record<string, string>}
         >
+          {!totpItems.length && props.loading && <LoadingState lines={6} />}
           {!totpItems.length && !props.loading && <div className="empty">{t('txt_no_verification_codes')}</div>}
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-            <SortableContext items={totpItems.map((cipher) => cipher.id)} strategy={rectSortingStrategy}>
-              {totpItems.map((cipher) => (
-                <SortableTotpRow
-                  key={cipher.id}
-                  cipher={cipher}
-                  live={totpCodes[cipher.id] ? { code: totpCodes[cipher.id] || '', remain: remainingSeconds } : null}
-                  onCopy={(value) => void copyToClipboard(value)}
-                />
-              ))}
-            </SortableContext>
-          </DndContext>
+          {totpItems.map((cipher) => (
+            <TotpRow
+              key={cipher.id}
+              cipher={cipher}
+              live={totpCodes[cipher.id] ? { code: totpCodes[cipher.id] || '', remain: remainingSeconds } : null}
+              onCopy={(value) => void copyToClipboard(value)}
+            />
+          ))}
         </div>
       </div>
     </div>

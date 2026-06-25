@@ -56,3 +56,18 @@ export async function handleNotificationsHub(request: Request, env: Env): Promis
   }
   return stub.fetch(new Request(forwardedUrl.toString(), request));
 }
+
+export async function handleAnonymousNotificationsHub(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const authRequestId = String(url.searchParams.get('Token') || url.searchParams.get('token') || '').trim();
+  if (!authRequestId) return errorResponse('Token is required', 400);
+  if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+    return errorResponse('Expected websocket', 426);
+  }
+
+  const id = env.NOTIFICATIONS_HUB.idFromName(authRequestId);
+  const stub = env.NOTIFICATIONS_HUB.get(id);
+  const forwardedUrl = new URL(request.url);
+  forwardedUrl.searchParams.set('nw_auth_request_id', authRequestId);
+  return stub.fetch(new Request(forwardedUrl.toString(), request));
+}

@@ -1,6 +1,8 @@
 import { JWTPayload } from '../types';
 import { LIMITS } from '../config/limits';
 
+const hmacKeyCache = new Map<string, Promise<CryptoKey>>();
+
 // Base64 URL encode
 function base64UrlEncode(data: Uint8Array): string {
   const base64 = btoa(String.fromCharCode(...data));
@@ -17,6 +19,23 @@ function base64UrlDecode(str: string): Uint8Array {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes;
+}
+
+function getHmacKey(secret: string): Promise<CryptoKey> {
+  const cacheKey = secret;
+  let cached = hmacKeyCache.get(cacheKey);
+  if (cached) return cached;
+
+  const encoder = new TextEncoder();
+  cached = crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign', 'verify']
+  );
+  hmacKeyCache.set(cacheKey, cached);
+  return cached;
 }
 
 // Create JWT
@@ -40,13 +59,7 @@ export async function createJWT(payload: Omit<JWTPayload, 'iat' | 'exp' | 'iss' 
   
   const data = `${headerB64}.${payloadB64}`;
   
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
+  const key = await getHmacKey(secret);
   
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data));
   const signatureB64 = base64UrlEncode(new Uint8Array(signature));
@@ -63,13 +76,7 @@ export async function verifyJWT(token: string, secret: string): Promise<JWTPaylo
     const [headerB64, payloadB64, signatureB64] = parts;
     const encoder = new TextEncoder();
     
-    const key = await crypto.subtle.importKey(
-      'raw',
-      encoder.encode(secret),
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['verify']
-    );
+    const key = await getHmacKey(secret);
     
     const data = `${headerB64}.${payloadB64}`;
     const signature = base64UrlDecode(signatureB64);
@@ -133,13 +140,7 @@ export async function createFileDownloadToken(
   
   const data = `${headerB64}.${payloadB64}`;
   
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
+  const key = await getHmacKey(secret);
   
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data));
   const signatureB64 = base64UrlEncode(new Uint8Array(signature));
@@ -159,13 +160,7 @@ export async function verifyFileDownloadToken(
     const [headerB64, payloadB64, signatureB64] = parts;
     const encoder = new TextEncoder();
     
-    const key = await crypto.subtle.importKey(
-      'raw',
-      encoder.encode(secret),
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['verify']
-    );
+    const key = await getHmacKey(secret);
     
     const data = `${headerB64}.${payloadB64}`;
     const signature = base64UrlDecode(signatureB64);
@@ -205,13 +200,7 @@ export async function createAttachmentUploadToken(
   const payloadB64 = base64UrlEncode(encoder.encode(JSON.stringify(payload)));
   const data = `${headerB64}.${payloadB64}`;
 
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
+  const key = await getHmacKey(secret);
 
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data));
   const signatureB64 = base64UrlEncode(new Uint8Array(signature));
@@ -229,13 +218,7 @@ export async function verifyAttachmentUploadToken(
     const [headerB64, payloadB64, signatureB64] = parts;
     const encoder = new TextEncoder();
 
-    const key = await crypto.subtle.importKey(
-      'raw',
-      encoder.encode(secret),
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['verify']
-    );
+    const key = await getHmacKey(secret);
 
     const data = `${headerB64}.${payloadB64}`;
     const signature = base64UrlDecode(signatureB64);
@@ -285,13 +268,7 @@ export async function createSendFileDownloadToken(
   const payloadB64 = base64UrlEncode(encoder.encode(JSON.stringify(payload)));
   const data = `${headerB64}.${payloadB64}`;
 
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
+  const key = await getHmacKey(secret);
 
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data));
   const signatureB64 = base64UrlEncode(new Uint8Array(signature));
@@ -309,13 +286,7 @@ export async function verifySendFileDownloadToken(
     const [headerB64, payloadB64, signatureB64] = parts;
     const encoder = new TextEncoder();
 
-    const key = await crypto.subtle.importKey(
-      'raw',
-      encoder.encode(secret),
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['verify']
-    );
+    const key = await getHmacKey(secret);
 
     const data = `${headerB64}.${payloadB64}`;
     const signature = base64UrlDecode(signatureB64);
@@ -361,13 +332,7 @@ export async function createSendFileUploadToken(
   const payloadB64 = base64UrlEncode(encoder.encode(JSON.stringify(payload)));
   const data = `${headerB64}.${payloadB64}`;
 
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
+  const key = await getHmacKey(secret);
 
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data));
   const signatureB64 = base64UrlEncode(new Uint8Array(signature));
@@ -385,13 +350,7 @@ export async function verifySendFileUploadToken(
     const [headerB64, payloadB64, signatureB64] = parts;
     const encoder = new TextEncoder();
 
-    const key = await crypto.subtle.importKey(
-      'raw',
-      encoder.encode(secret),
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['verify']
-    );
+    const key = await getHmacKey(secret);
 
     const data = `${headerB64}.${payloadB64}`;
     const signature = base64UrlDecode(signatureB64);
@@ -430,13 +389,7 @@ export async function createSendAccessToken(sendId: string, secret: string): Pro
   const payloadB64 = base64UrlEncode(encoder.encode(JSON.stringify(payload)));
   const data = `${headerB64}.${payloadB64}`;
 
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
+  const key = await getHmacKey(secret);
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data));
   const signatureB64 = base64UrlEncode(new Uint8Array(signature));
   return `${data}.${signatureB64}`;
@@ -450,13 +403,7 @@ export async function verifySendAccessToken(token: string, secret: string): Prom
     const [headerB64, payloadB64, signatureB64] = parts;
     const encoder = new TextEncoder();
 
-    const key = await crypto.subtle.importKey(
-      'raw',
-      encoder.encode(secret),
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['verify']
-    );
+    const key = await getHmacKey(secret);
 
     const data = `${headerB64}.${payloadB64}`;
     const signature = base64UrlDecode(signatureB64);

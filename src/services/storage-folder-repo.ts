@@ -1,4 +1,4 @@
-import type { Cipher, Folder } from '../types';
+import type { Folder } from '../types';
 
 function mapFolderRow(row: any): Folder {
   return {
@@ -36,26 +36,18 @@ export async function deleteFolder(db: D1Database, id: string, userId: string): 
 export async function clearFolderFromCiphers(
   db: D1Database,
   userId: string,
-  folderId: string,
-  saveCipher: (cipher: Cipher) => Promise<void>
+  folderId: string
 ): Promise<void> {
   const now = new Date().toISOString();
-  const res = await db
-    .prepare('SELECT data FROM ciphers WHERE user_id = ? AND folder_id = ?')
-    .bind(userId, folderId)
-    .all<{ data: string }>();
-
-  for (const row of (res.results || [])) {
-    let cipher: Cipher;
-    try {
-      cipher = JSON.parse(row.data) as Cipher;
-    } catch {
-      continue;
-    }
-    cipher.folderId = null;
-    cipher.updatedAt = now;
-    await saveCipher(cipher);
-  }
+  await db
+    .prepare(
+      `UPDATE ciphers
+       SET folder_id = NULL, updated_at = ?,
+           data = json_remove(data, '$.folderId', '$.folder_id', '$.updatedAt', '$.revisionDate')
+       WHERE user_id = ? AND folder_id = ?`
+    )
+    .bind(now, userId, folderId)
+    .run();
 }
 
 export async function bulkDeleteFolders(
@@ -63,34 +55,26 @@ export async function bulkDeleteFolders(
   userId: string,
   ids: string[],
   sqlChunkSize: (fixedBindCount: number) => number,
-  saveCipher: (cipher: Cipher) => Promise<void>,
   updateRevisionDate: (userId: string) => Promise<string>
 ): Promise<string | null> {
   const uniqueIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
   if (!uniqueIds.length) return null;
 
-  const chunkSize = sqlChunkSize(1);
   const now = new Date().toISOString();
+  const chunkSize = sqlChunkSize(2);
 
   for (let i = 0; i < uniqueIds.length; i += chunkSize) {
     const chunk = uniqueIds.slice(i, i + chunkSize);
     const placeholders = chunk.map(() => '?').join(',');
-    const res = await db
-      .prepare(`SELECT data FROM ciphers WHERE user_id = ? AND folder_id IN (${placeholders})`)
-      .bind(userId, ...chunk)
-      .all<{ data: string }>();
-
-    for (const row of res.results || []) {
-      let cipher: Cipher;
-      try {
-        cipher = JSON.parse(row.data) as Cipher;
-      } catch {
-        continue;
-      }
-      cipher.folderId = null;
-      cipher.updatedAt = now;
-      await saveCipher(cipher);
-    }
+    await db
+      .prepare(
+        `UPDATE ciphers
+         SET folder_id = NULL, updated_at = ?,
+             data = json_remove(data, '$.folderId', '$.folder_id', '$.updatedAt', '$.revisionDate')
+         WHERE user_id = ? AND folder_id IN (${placeholders})`
+      )
+      .bind(now, userId, ...chunk)
+      .run();
 
     await db
       .prepare(`DELETE FROM folders WHERE user_id = ? AND id IN (${placeholders})`)

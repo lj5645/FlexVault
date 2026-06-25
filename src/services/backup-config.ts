@@ -16,7 +16,8 @@ import {
   type BackupRuntimeState,
   type BackupScheduleConfig,
   type BackupSettings,
-  type E3BackupDestination,
+  type S3BackupAddressingStyle,
+  type S3BackupDestination,
   type WebDavBackupDestination,
   createBackupRandomId,
   createDefaultBackupDestinationName,
@@ -35,7 +36,8 @@ export type {
   BackupRuntimeState,
   BackupScheduleConfig,
   BackupSettings,
-  E3BackupDestination,
+  S3BackupAddressingStyle,
+  S3BackupDestination,
   WebDavBackupDestination,
 } from '../../shared/backup-schema';
 
@@ -105,32 +107,36 @@ function normalizeStartTime(value: unknown, fallback: string = BACKUP_DEFAULT_ST
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
-function normalizeE3Destination(value: unknown, allowIncomplete = false): E3BackupDestination {
+function normalizeS3Destination(value: unknown, allowIncomplete = false): S3BackupDestination {
   const source = isPlainObject(value) ? value : {};
   const endpoint = asTrimmedString(source.endpoint);
   const bucket = asTrimmedString(source.bucket);
+  const addressingStyleRaw = asTrimmedString(source.addressingStyle);
+  const addressingStyle: S3BackupAddressingStyle =
+    addressingStyleRaw === 'virtual-hosted-style' ? 'virtual-hosted-style' : 'path-style';
   const accessKeyId = asTrimmedString(source.accessKeyId);
   const secretAccessKey = asTrimmedString(source.secretAccessKey);
   const region = asTrimmedString(source.region) || 'auto';
   const rootPath = normalizePath(source.rootPath);
 
   if (!allowIncomplete || endpoint) {
-    if (!endpoint) throw new Error('E3 endpoint is required');
-    if (!/^https?:\/\//i.test(endpoint)) throw new Error('E3 endpoint must start with http:// or https://');
+    if (!endpoint) throw new Error('S3 endpoint is required');
+    if (!/^https?:\/\//i.test(endpoint)) throw new Error('S3 endpoint must start with http:// or https://');
   }
   if (!allowIncomplete || bucket) {
-    if (!bucket) throw new Error('E3 bucket is required');
+    if (!bucket) throw new Error('S3 bucket is required');
   }
   if (!allowIncomplete || accessKeyId) {
-    if (!accessKeyId) throw new Error('E3 access key is required');
+    if (!accessKeyId) throw new Error('S3 access key is required');
   }
   if (!allowIncomplete || secretAccessKey) {
-    if (!secretAccessKey) throw new Error('E3 secret key is required');
+    if (!secretAccessKey) throw new Error('S3 secret key is required');
   }
 
   return {
     endpoint: endpoint ? endpoint.replace(/\/+$/, '') : '',
     bucket,
+    addressingStyle,
     region,
     accessKeyId,
     secretAccessKey,
@@ -169,7 +175,7 @@ function normalizeDestination(
   destination: unknown,
   allowIncomplete = false
 ): BackupDestinationConfig {
-  if (destinationType === 'e3') return normalizeE3Destination(destination, allowIncomplete);
+  if (destinationType === 's3') return normalizeS3Destination(destination, allowIncomplete);
   return normalizeWebDavDestination(destination, allowIncomplete);
 }
 
@@ -204,7 +210,8 @@ function defaultDestinationName(type: BackupDestinationType, index: number): str
 
 function getDestinationType(raw: unknown): BackupDestinationType {
   const value = asTrimmedString(raw);
-  if (value === 'e3' || value === 'webdav') return value;
+  if (value === 'e3') return 's3';
+  if (value === 's3' || value === 'webdav') return value;
   throw new Error('Backup destination type is invalid');
 }
 
@@ -266,8 +273,8 @@ function parseLegacyBackupSettings(rawValue: Record<string, unknown>, fallbackTi
       : BACKUP_DEFAULT_INTERVAL_HOURS;
   const destinationTypeRaw = asTrimmedString(rawValue.destinationType);
   const destinationType: BackupDestinationType =
-    destinationTypeRaw === 'e3' || destinationTypeRaw === 'webdav'
-      ? destinationTypeRaw
+    destinationTypeRaw === 'e3' || destinationTypeRaw === 's3' || destinationTypeRaw === 'webdav'
+      ? getDestinationType(destinationTypeRaw)
       : 'webdav';
   const destination = {
     id: createBackupRandomId(),
@@ -408,13 +415,6 @@ export async function loadBackupSettings(storage: StorageService, env: Env, fall
 
 export async function saveBackupSettings(storage: StorageService, env: Env, settings: BackupSettings): Promise<void> {
   const users = await storage.getAllUsers();
-  const hasPortableAdmins = users.some(
-    (user) => user.role === 'admin' && user.status === 'active' && typeof user.publicKey === 'string' && user.publicKey.trim().length > 0
-  );
-  if (!hasPortableAdmins) {
-    await storage.setConfigValue(BACKUP_SETTINGS_CONFIG_KEY, serializeBackupSettings(settings));
-    return;
-  }
   const encrypted = await encryptBackupSettingsEnvelope(serializeBackupSettings(settings), env, users);
   await storage.setConfigValue(BACKUP_SETTINGS_CONFIG_KEY, encrypted);
 }
@@ -441,12 +441,6 @@ export async function normalizeImportedBackupSettingsValue(
     try {
       const decrypted = await decryptBackupSettingsRuntime(raw, env);
       const settings = parseBackupSettings(decrypted, fallbackTimezone);
-      const hasPortableAdmins = users.some(
-        (user) => user.role === 'admin' && user.status === 'active' && typeof user.publicKey === 'string' && user.publicKey.trim().length > 0
-      );
-      if (!hasPortableAdmins) {
-        return serializeBackupSettings(settings);
-      }
       return encryptBackupSettingsEnvelope(serializeBackupSettings(settings), env, users);
     } catch {
       // Keep imported portable recovery data intact until an admin signs in and repairs it.
@@ -454,12 +448,6 @@ export async function normalizeImportedBackupSettingsValue(
     }
   }
   const settings = parseBackupSettings(raw, fallbackTimezone);
-  const hasPortableAdmins = users.some(
-    (user) => user.role === 'admin' && user.status === 'active' && typeof user.publicKey === 'string' && user.publicKey.trim().length > 0
-  );
-  if (!hasPortableAdmins) {
-    return serializeBackupSettings(settings);
-  }
   return encryptBackupSettingsEnvelope(serializeBackupSettings(settings), env, users);
 }
 
@@ -596,6 +584,50 @@ function getBackupSlotStartsForLocalDay(
     slots.push(new Date(slotMs));
   }
   return slots;
+}
+
+export function hasBackupSlotBetween(
+  destination: BackupDestinationRecord,
+  startInclusive: Date,
+  endExclusive: Date
+): boolean {
+  if (!destination.schedule.enabled) return false;
+  const startMs = startInclusive.getTime();
+  const endMs = endExclusive.getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return false;
+
+  const lastAttemptAt = destination.runtime.lastAttemptAt ? new Date(destination.runtime.lastAttemptAt) : null;
+  const lastAttemptMs = lastAttemptAt && Number.isFinite(lastAttemptAt.getTime())
+    ? lastAttemptAt.getTime()
+    : Number.NEGATIVE_INFINITY;
+
+  const dayCursor = new Date(startMs);
+  dayCursor.setUTCHours(0, 0, 0, 0);
+  const endDay = new Date(endMs);
+  endDay.setUTCHours(0, 0, 0, 0);
+  const checkedLocalDateKeys = new Set<string>();
+
+  while (dayCursor.getTime() <= endDay.getTime() + 24 * 60 * 60 * 1000) {
+    const localDateKey = getBackupLocalDateKey(dayCursor, destination.schedule.timezone);
+    if (!checkedLocalDateKeys.has(localDateKey)) {
+      checkedLocalDateKeys.add(localDateKey);
+      const slotStarts = getBackupSlotStartsForLocalDay(
+        localDateKey,
+        destination.schedule.timezone,
+        destination.schedule.startTime,
+        destination.schedule.intervalHours
+      );
+      for (const slotStart of slotStarts) {
+        const slotStartMs = slotStart.getTime();
+        if (slotStartMs < startMs || slotStartMs >= endMs) continue;
+        if (lastAttemptMs >= slotStartMs) continue;
+        return true;
+      }
+    }
+    dayCursor.setUTCDate(dayCursor.getUTCDate() + 1);
+  }
+
+  return false;
 }
 
 export function isBackupDueNow(

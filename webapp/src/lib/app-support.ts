@@ -1,6 +1,6 @@
 import { hkdf } from '@/lib/crypto';
 import { t } from '@/lib/i18n';
-import type { Cipher, VaultDraft } from '@/lib/types';
+import type { VaultDraft } from '@/lib/types';
 import type { ImportResultSummary } from '@/components/ImportPage';
 
 const SEND_KEY_SALT = 'bitwarden-send';
@@ -26,7 +26,7 @@ export function looksLikeCipherString(value: string): boolean {
   return /^\d+\.[A-Za-z0-9+/=]+\|[A-Za-z0-9+/=]+(?:\|[A-Za-z0-9+/=]+)?$/.test(String(value || '').trim());
 }
 
-export function asText(value: unknown): string {
+function asText(value: unknown): string {
   if (value === null || value === undefined) return '';
   return String(value);
 }
@@ -106,7 +106,7 @@ export function summarizeImportResult(
   };
 }
 
-export function buildEmptyImportDraft(type: number): VaultDraft {
+function buildEmptyImportDraft(type: number): VaultDraft {
   return {
     type,
     favorite: false,
@@ -279,6 +279,3 @@ export async function deriveSendKeyParts(sendKeyMaterial: Uint8Array): Promise<{
   return { enc: derived.slice(0, 32), mac: derived.slice(32, 64) };
 }
 
-export function findCipherById(ciphers: Cipher[], id: string): Cipher | null {
-  return ciphers.find((cipher) => cipher.id === id) || null;
-}

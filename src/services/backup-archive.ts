@@ -1,14 +1,28 @@
 import { zipSync, unzipSync } from 'fflate';
 import type { Env } from '../types';
 import { APP_VERSION } from '../../shared/app-version';
+import { BACKUP_SETTINGS_CONFIG_KEY } from './backup-config';
+import { exportPortableBackupSettingsEnvelope } from './backup-settings-crypto';
 import {
   getAttachmentObjectKey,
   getBlobStorageKind,
 } from './blob-store';
 
+// CONTRACT:
+// This file defines the exported instance-backup archive shape. Keep it in lock
+// step with src/services/backup-import.ts and webapp/src/lib/api/backup.ts.
+//
+// WHEN CHANGING THIS:
+// - Add persistent tables to BackupPayload, export SQL, manifest tableCounts,
+//   and validateBackupPayloadContents().
+// - Keep secrets and transient runtime rows sanitized before writing db.json.
+// - users.api_key is intentionally not exported.
+// - backup.settings.v1 is exported as portable-only; the current server runtime
+//   envelope must not leave the instance.
 type SqlRow = Record<string, string | number | null>;
 
 const BACKUP_FORMAT_VERSION = 1;
+const BACKUP_RUNNER_LOCK_CONFIG_KEY = 'backup.runner.lock.v1';
 const BACKUP_FILE_HASH_PREFIX_LENGTH = 5;
 // Worker-side backup export must stay well below Cloudflare CPU limits.
 // Prefer store-only ZIP entries over heavier compression to keep exports reliable.
@@ -48,10 +62,13 @@ export interface BackupPayload {
   db: {
     config: SqlRow[];
     users: SqlRow[];
+    domain_settings: SqlRow[];
     user_revisions: SqlRow[];
     folders: SqlRow[];
     ciphers: SqlRow[];
     attachments: SqlRow[];
+    webauthn_credentials?: SqlRow[];
+    trusted_two_factor_device_tokens?: SqlRow[];
   };
 }
 
@@ -87,6 +104,23 @@ export type BackupArchiveBuildProgressReporter = (event: BackupArchiveBuildProgr
 async function queryRows(db: D1Database, sql: string, ...values: unknown[]): Promise<SqlRow[]> {
   const result = await db.prepare(sql).bind(...values).all<SqlRow>();
   return (result.results || []).map((row) => ({ ...row }));
+}
+
+function sanitizeConfigRowsForExport(rows: SqlRow[]): SqlRow[] {
+  const sanitized: SqlRow[] = [];
+  for (const row of rows) {
+    const key = String(row.key || '').trim();
+    if (!key || key === BACKUP_RUNNER_LOCK_CONFIG_KEY) continue;
+
+    if (key === BACKUP_SETTINGS_CONFIG_KEY) {
+      const portableOnly = exportPortableBackupSettingsEnvelope(typeof row.value === 'string' ? row.value : null);
+      if (portableOnly) sanitized.push({ ...row, value: portableOnly });
+      continue;
+    }
+
+    sanitized.push({ ...row });
+  }
+  return sanitized;
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
@@ -264,9 +298,12 @@ export function validateBackupPayloadContents(
   const configRows = ensureRowArray(payload.db.config, 'config');
   const userRows = ensureRowArray(payload.db.users, 'users');
   const revisionRows = ensureRowArray(payload.db.user_revisions, 'user_revisions');
+  const domainSettingsRows = ensureRowArray(payload.db.domain_settings || [], 'domain_settings');
   const folderRows = ensureRowArray(payload.db.folders, 'folders');
   const cipherRows = ensureRowArray(payload.db.ciphers, 'ciphers');
   const attachmentRows = ensureRowArray(payload.db.attachments, 'attachments');
+  const accountPasskeyRows = ensureRowArray(payload.db.webauthn_credentials || [], 'webauthn_credentials');
+  const trustedTwoFactorTokenRows = ensureRowArray(payload.db.trusted_two_factor_device_tokens || [], 'trusted_two_factor_device_tokens');
   const externalAttachmentKeys = new Set<string>(
     options.allowExternalAttachmentBlobs
       ? (payload.manifest.attachmentBlobs || []).map((item) => `attachments/${String(item.cipherId || '').trim()}/${String(item.attachmentId || '').trim()}.bin`)
@@ -292,6 +329,18 @@ export function validateBackupPayloadContents(
     if (!userId || !userIds.has(userId)) {
       throw new Error(`Backup archive contains a revision for an unknown user: ${userId || '(empty)'}`);
     }
+  }
+
+  const domainSettingUserIds = new Set<string>();
+  for (const row of domainSettingsRows) {
+    const userId = String(row.user_id || '').trim();
+    if (!userId || !userIds.has(userId)) {
+      throw new Error(`Backup archive contains domain settings for an unknown user: ${userId || '(empty)'}`);
+    }
+    if (domainSettingUserIds.has(userId)) {
+      throw new Error(`Backup archive contains duplicate domain settings for user: ${userId}`);
+    }
+    domainSettingUserIds.add(userId);
   }
 
   const folderIds = new Set<string>();
@@ -327,6 +376,37 @@ export function validateBackupPayloadContents(
       throw new Error(`Backup archive is missing required file: attachments/${cipherId}/${id}.bin`);
     }
   }
+
+  const accountPasskeyIds = new Set<string>();
+  const accountPasskeyCredentialIds = new Set<string>();
+  for (const row of accountPasskeyRows) {
+    const id = String(row.id || '').trim();
+    const userId = String(row.user_id || '').trim();
+    const credentialId = String(row.credential_id || '').trim();
+    const publicKey = String(row.public_key || '').trim();
+    if (!id || !userIds.has(userId) || !credentialId || !publicKey) {
+      throw new Error('Backup archive contains an invalid account passkey row');
+    }
+    if (accountPasskeyIds.has(id)) throw new Error(`Backup archive contains duplicate account passkey id: ${id}`);
+    if (accountPasskeyCredentialIds.has(credentialId)) throw new Error(`Backup archive contains duplicate account passkey credential id: ${credentialId}`);
+    accountPasskeyIds.add(id);
+    accountPasskeyCredentialIds.add(credentialId);
+  }
+
+  const trustedTwoFactorTokens = new Set<string>();
+  for (const row of trustedTwoFactorTokenRows) {
+    const token = String(row.token || '').trim();
+    const userId = String(row.user_id || '').trim();
+    const deviceIdentifier = String(row.device_identifier || '').trim();
+    const expiresAt = Number(row.expires_at || 0);
+    if (!token || !userIds.has(userId) || !deviceIdentifier || !Number.isFinite(expiresAt) || expiresAt <= 0) {
+      throw new Error('Backup archive contains an invalid trusted two-factor device token row');
+    }
+    if (trustedTwoFactorTokens.has(token)) {
+      throw new Error(`Backup archive contains duplicate trusted two-factor device token: ${token}`);
+    }
+    trustedTwoFactorTokens.add(token);
+  }
 }
 
 export async function buildBackupArchive(
@@ -345,14 +425,18 @@ export async function buildBackupArchive(
     includeAttachments,
   });
   const encoder = new TextEncoder();
-  const [configRows, userRows, revisionRows, folderRows, cipherRows, attachmentRows] = await Promise.all([
+  const [configRows, userRows, domainSettingsRows, revisionRows, folderRows, cipherRows, attachmentRows, accountPasskeyRows, trustedTwoFactorTokenRows] = await Promise.all([
     queryRows(env.DB, 'SELECT key, value FROM config ORDER BY key ASC'),
-    queryRows(env.DB, 'SELECT id, email, name, master_password_hint, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, role, status, verify_devices, totp_secret, totp_recovery_code, api_key, created_at, updated_at FROM users ORDER BY created_at ASC'),
+    queryRows(env.DB, 'SELECT id, email, name, master_password_hint, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, role, status, verify_devices, totp_secret, totp_recovery_code, created_at, updated_at FROM users ORDER BY created_at ASC'),
+    queryRows(env.DB, 'SELECT user_id, equivalent_domains, custom_equivalent_domains, excluded_global_equivalent_domains, updated_at FROM domain_settings ORDER BY user_id ASC'),
     queryRows(env.DB, 'SELECT user_id, revision_date FROM user_revisions ORDER BY user_id ASC'),
     queryRows(env.DB, 'SELECT id, user_id, name, created_at, updated_at FROM folders ORDER BY created_at ASC'),
     queryRows(env.DB, 'SELECT id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at FROM ciphers ORDER BY created_at ASC'),
     queryRows(env.DB, 'SELECT id, cipher_id, file_name, size, size_name, key FROM attachments ORDER BY cipher_id ASC, id ASC'),
+    queryRows(env.DB, 'SELECT id, user_id, name, public_key, credential_id, counter, type, aa_guid, transports, encrypted_user_key, encrypted_public_key, encrypted_private_key, supports_prf, created_at, updated_at FROM webauthn_credentials ORDER BY created_at ASC'),
+    queryRows(env.DB, 'SELECT token, user_id, device_identifier, expires_at FROM trusted_two_factor_device_tokens WHERE expires_at >= ? ORDER BY user_id ASC, device_identifier ASC, expires_at DESC', date.getTime()),
   ]);
+  const exportedConfigRows = sanitizeConfigRowsForExport(configRows);
   const exportedAttachmentRows = includeAttachments ? attachmentRows : [];
   const attachmentBlobs: BackupManifestAttachmentBlob[] = exportedAttachmentRows.map((row) => {
     const cipherId = String(row.cipher_id || '').trim();
@@ -371,12 +455,15 @@ export async function buildBackupArchive(
     appVersion: APP_VERSION,
     storageKind: getBlobStorageKind(env),
     tableCounts: {
-      config: configRows.length,
+      config: exportedConfigRows.length,
       users: userRows.length,
+      domain_settings: domainSettingsRows.length,
       user_revisions: revisionRows.length,
       folders: folderRows.length,
       ciphers: cipherRows.length,
       attachments: exportedAttachmentRows.length,
+      webauthn_credentials: accountPasskeyRows.length,
+      trusted_two_factor_device_tokens: trustedTwoFactorTokenRows.length,
     },
     includes: {
       attachments: includeAttachments,
@@ -392,12 +479,15 @@ export async function buildBackupArchive(
   const files: Record<string, Uint8Array> = {
     'manifest.json': encoder.encode(JSON.stringify(manifestBase, null, BACKUP_JSON_INDENT)),
     'db.json': encoder.encode(JSON.stringify({
-      config: configRows,
+      config: exportedConfigRows,
       users: userRows,
+      domain_settings: domainSettingsRows,
       user_revisions: revisionRows,
       folders: folderRows,
       ciphers: cipherRows,
       attachments: exportedAttachmentRows,
+      webauthn_credentials: accountPasskeyRows,
+      trusted_two_factor_device_tokens: trustedTwoFactorTokenRows,
     }, null, BACKUP_JSON_INDENT)),
   };
 

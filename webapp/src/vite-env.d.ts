@@ -8,3 +8,21 @@ declare module 'qrcode-generator' {
   }
   export default function qrcode(typeNumber: number, errorCorrectionLevel: 'L' | 'M' | 'Q' | 'H'): QrCode;
 }
+
+interface BarcodeDetectorResult {
+  rawValue: string;
+}
+
+interface BarcodeDetector {
+  detect(image: ImageBitmapSource): Promise<BarcodeDetectorResult[]>;
+}
+
+interface BarcodeDetectorConstructor {
+  new (options?: { formats?: string[] }): BarcodeDetector;
+}
+
+interface Window {
+  BarcodeDetector?: BarcodeDetectorConstructor;
+}
+
+declare const __NODEWARDEN_DEMO__: boolean;
