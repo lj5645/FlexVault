@@ -19,4 +19,4 @@ ENV STORAGE_PATH=/app/data/attachments
 
 EXPOSE 3000
 
-CMD ["npx", "tsx", "src/selfhosted/index.ts"]
+CMD ["npx", "tsx", "--loader", "src/selfhosted/cloudflare-workers-loader.mjs", "src/selfhosted/index.ts"]

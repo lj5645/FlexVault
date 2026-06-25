@@ -1,6 +1,7 @@
 import { SQLiteD1Adapter, createDatabaseAdapter } from './database';
 import { FileSystemR2Adapter, createStorageAdapter } from './storage';
 import { NotificationsHubServer, NotificationsHubNamespace, createNotificationsHub, createNotificationsHubNamespace } from './websocket';
+import { BackupTransferRunnerStub } from './backup-transfer-stub';
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
@@ -8,9 +9,14 @@ import fs from 'fs';
 export interface SelfHostedEnv {
   DB: SQLiteD1Adapter;
   ATTACHMENTS: FileSystemR2Adapter;
+  ATTACHMENTS_KV?: any;
   NOTIFICATIONS_HUB: NotificationsHubNamespace;
+  BACKUP_TRANSFER_RUNNER: BackupTransferRunnerStub;
   JWT_SECRET: string;
   TOTP_SECRET?: string;
+  WEBAUTHN_RP_ID?: string;
+  WEBAUTHN_RP_NAME?: string;
+  WEBAUTHN_ALLOWED_ORIGINS?: string;
   ASSETS?: {
     fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   };
@@ -52,6 +58,7 @@ export function createEnv(config: AppConfig): SelfHostedEnv {
     DB: db,
     ATTACHMENTS: attachments,
     NOTIFICATIONS_HUB: null as any,
+    BACKUP_TRANSFER_RUNNER: new BackupTransferRunnerStub(),
     JWT_SECRET: config.jwtSecret,
     TOTP_SECRET: config.totpSecret,
   };
