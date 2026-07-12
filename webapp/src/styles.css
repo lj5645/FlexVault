@@ -2,6 +2,8 @@
 @import './styles/base.css';
 @import './styles/auth.css';
 @import './styles/forms.css';
+@import './styles/generator.css';
+@import './styles/password-security.css';
 @import './styles/shell.css';
 @import './styles/vault.css';
 @import './styles/management.css';
@@ -14,7 +16,6 @@
 /* Unified product polish: refined, smooth, comfortable surfaces across desktop, mobile, and dark mode. */
 
 /* ── surface consistency ── */
-.app-shell,
 .auth-card,
 .dialog-card,
 .card,
@@ -34,12 +35,6 @@
   border-radius: var(--radius-lg);
   background: var(--panel);
   box-shadow: var(--shadow-sm);
-}
-
-.app-shell {
-  background: var(--panel-soft);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
 }
 
 .topbar,
@@ -104,7 +99,6 @@
 }
 
 /* ── dark mode surface resets ── */
-:root[data-theme='dark'] .app-shell,
 :root[data-theme='dark'] .auth-card,
 :root[data-theme='dark'] .dialog-card,
 :root[data-theme='dark'] .card,
@@ -259,17 +253,6 @@ h4 {
   letter-spacing: 0;
 }
 
-.app-page {
-  padding: 18px;
-}
-
-.app-shell {
-  border-radius: var(--radius-xl);
-  border: 1px solid var(--line);
-  background: var(--panel);
-  box-shadow: var(--shadow-lg);
-}
-
 .topbar {
   height: 56px;
   padding-inline: 16px;
@@ -316,7 +299,7 @@ h4 {
 }
 
 .app-main {
-  grid-template-columns: 212px minmax(0, 1fr);
+  grid-template-columns: 240px minmax(0, 1fr);
   background: var(--panel-soft);
 }
 
@@ -441,6 +424,48 @@ h4 {
 
 .auth-card {
   padding: 24px;
+}
+
+.settings-home-card {
+  min-height: min(640px, calc(100dvh - 180px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-home-section {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-home-section h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-md);
+}
+
+.settings-home-spacer {
+  flex: 1;
+  min-height: 4px;
+}
+
+.mobile-settings-links {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.mobile-settings-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 700;
 }
 
 .auth-card h1,
@@ -652,7 +677,7 @@ h4 {
 }
 
 .card {
-  margin-bottom: 8px;
+  margin-bottom: 10;
   padding: 14px;
 }
 
@@ -916,7 +941,6 @@ textarea {
   background: var(--bg-accent);
 }
 
-:root[data-theme='dark'] .app-shell,
 :root[data-theme='dark'] .topbar,
 :root[data-theme='dark'] .app-side,
 :root[data-theme='dark'] .mobile-tabbar,

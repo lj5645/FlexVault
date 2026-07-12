@@ -107,6 +107,14 @@ export async function getCipher(db: D1Database, id: string): Promise<Cipher | nu
   return parseCipherRow(row);
 }
 
+export async function getCipherForUser(db: D1Database, id: string, userId: string): Promise<Cipher | null> {
+  const row = await db
+    .prepare(`SELECT ${selectCipherColumns()} FROM ciphers WHERE id = ? AND user_id = ?`)
+    .bind(id, userId)
+    .first<CipherRow>();
+  return parseCipherRow(row);
+}
+
 export async function saveCipher(db: D1Database, safeBind: SafeBind, cipher: Cipher): Promise<void> {
   const folderId = normalizeOptionalId(cipher.folderId);
   const data = buildCipherData(cipher, folderId);
@@ -114,7 +122,8 @@ export async function saveCipher(db: D1Database, safeBind: SafeBind, cipher: Cip
     'INSERT INTO ciphers(id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at) ' +
     'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
     'ON CONFLICT(id) DO UPDATE SET ' +
-    'user_id=excluded.user_id, type=excluded.type, folder_id=excluded.folder_id, name=excluded.name, notes=excluded.notes, favorite=excluded.favorite, data=excluded.data, reprompt=excluded.reprompt, key=excluded.key, updated_at=excluded.updated_at, archived_at=excluded.archived_at, deleted_at=excluded.deleted_at'
+    'type=excluded.type, folder_id=excluded.folder_id, name=excluded.name, notes=excluded.notes, favorite=excluded.favorite, data=excluded.data, reprompt=excluded.reprompt, key=excluded.key, updated_at=excluded.updated_at, archived_at=excluded.archived_at, deleted_at=excluded.deleted_at ' +
+    'WHERE user_id=excluded.user_id'
   );
   await safeBind(
     stmt,

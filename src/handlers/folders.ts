@@ -80,7 +80,7 @@ export async function handleGetFolders(request: Request, env: Env, userId: strin
 // GET /api/folders/:id
 export async function handleGetFolder(request: Request, env: Env, userId: string, id: string): Promise<Response> {
   const storage = new StorageService(env.DB);
-  const folder = await storage.getFolder(id);
+  const folder = await storage.getFolderForUser(id, userId);
 
   if (!folder || folder.userId !== userId) {
     return errorResponse('Folder not found', 404);
@@ -129,7 +129,7 @@ export async function handleCreateFolder(request: Request, env: Env, userId: str
 // PUT /api/folders/:id
 export async function handleUpdateFolder(request: Request, env: Env, userId: string, id: string): Promise<Response> {
   const storage = new StorageService(env.DB);
-  const folder = await storage.getFolder(id);
+  const folder = await storage.getFolderForUser(id, userId);
 
   if (!folder || folder.userId !== userId) {
     return errorResponse('Folder not found', 404);
@@ -163,7 +163,7 @@ export async function handleUpdateFolder(request: Request, env: Env, userId: str
 // DELETE /api/folders/:id
 export async function handleDeleteFolder(request: Request, env: Env, userId: string, id: string): Promise<Response> {
   const storage = new StorageService(env.DB);
-  const folder = await storage.getFolder(id);
+  const folder = await storage.getFolderForUser(id, userId);
 
   if (!folder || folder.userId !== userId) {
     return errorResponse('Folder not found', 404);
@@ -204,8 +204,8 @@ export async function handleBulkDeleteFolders(request: Request, env: Env, userId
 
   const folders = (
     await Promise.all(ids.map(async (id) => {
-      const folder = await storage.getFolder(id);
-      return folder && folder.userId === userId ? folder : null;
+      const folder = await storage.getFolderForUser(id, userId);
+      return folder;
     }))
   ).filter((folder): folder is Folder => !!folder);
   const revisionDate = await storage.bulkDeleteFolders(ids, userId);

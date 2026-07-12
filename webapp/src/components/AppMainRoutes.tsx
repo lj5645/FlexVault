@@ -1,18 +1,20 @@
 import { lazy, Suspense } from 'preact/compat';
 import { useEffect } from 'preact/hooks';
 import { Link, Route, Switch } from 'wouter';
-import { ArrowUpDown, Cloud, FileClock, Globe2, LogOut, Settings as SettingsIcon, Shield, ShieldUser } from 'lucide-preact';
+import { ArrowUpDown, Cloud, FileClock, Globe2, LogOut, Settings as SettingsIcon, Shield, ShieldCheck, ShieldUser } from 'lucide-preact';
 import type { ImportAttachmentFile, ImportResultSummary } from '@/components/ImportPage';
 import LoadingState from '@/components/LoadingState';
 import type { AdminBackupImportResponse, AdminBackupRunResponse, AdminBackupSettings, RemoteBackupBrowserResponse } from '@/lib/api/backup';
 import type { AuditLogFilters } from '@/lib/api/admin';
 import type { CiphersImportPayload } from '@/lib/api/vault';
 import { t } from '@/lib/i18n';
-import type { AccountPasskeyCredential, AdminInvite, AdminUser, AuditLogListResult, AuditLogSettings, AuthRequest, AuthorizedDevice, Cipher, CustomEquivalentDomain, DomainRules, Folder as VaultFolder, Profile, Send, SendDraft, SessionState, VaultDraft } from '@/lib/types';
+import type { AccountPasskeyCredential, AdminInvite, AdminUser, AuditLogListResult, AuditLogSettings, AuthRequest, AuthorizedDevice, Cipher, CustomEquivalentDomain, DomainRules, Folder as VaultFolder, Profile, Send, SendDraft, SessionState, TwoFactorPasskeySettings, VaultDraft, YubiKeyOtpSettings } from '@/lib/types';
 import type { ExportRequest } from '@/lib/export-formats';
 
 const VaultPage = lazy(() => import('@/components/VaultPage'));
 const SendsPage = lazy(() => import('@/components/SendsPage'));
+const PasswordGeneratorPage = lazy(() => import('@/components/PasswordGeneratorPage'));
+const PasswordSecurityPage = lazy(() => import('@/components/PasswordSecurityPage'));
 const TotpCodesPage = lazy(() => import('@/components/TotpCodesPage'));
 const SettingsPage = lazy(() => import('@/components/SettingsPage'));
 const DomainRulesPage = lazy(() => import('@/components/DomainRulesPage'));
@@ -39,6 +41,7 @@ export interface AppMainRoutesProps {
   session: SessionState | null;
   mobileLayout: boolean;
   mobileSidebarToggleKey: number;
+  themePreference: 'system' | 'light' | 'dark';
   importRoute: string;
   settingsHomeRoute: string;
   settingsAccountRoute: string;
@@ -54,9 +57,12 @@ export interface AppMainRoutesProps {
   adminLoading: boolean;
   adminError: string;
   totpEnabled: boolean;
+  yubikeyEnabled: boolean;
+  passkey2faEnabled: boolean;
   lockTimeoutMinutes: 0 | 1 | 5 | 15 | 30;
   sessionTimeoutAction: 'lock' | 'logout';
   authorizedDevices: AuthorizedDevice[];
+  currentDeviceIdentifier: string;
   authorizedDevicesLoading: boolean;
   authorizedDevicesError: string;
   domainRules: DomainRules | null;
@@ -65,6 +71,7 @@ export interface AppMainRoutesProps {
   onNavigate: (path: string) => void;
   onLogout: () => void;
   onNotify: (type: 'success' | 'error' | 'warning', text: string) => void;
+  onThemePreferenceChange: (preference: 'system' | 'light' | 'dark') => void;
   onImport: (
     payload: CiphersImportPayload,
     options: { folderMode: 'original' | 'none' | 'target'; targetFolderId: string | null },
@@ -109,6 +116,15 @@ export interface AppMainRoutesProps {
   onSavePasswordHint: (masterPasswordHint: string) => Promise<void>;
   onEnableTotp: (secret: string, token: string, masterPassword: string) => Promise<void>;
   onOpenDisableTotp: () => void;
+  onGetYubiKeySettings: (masterPassword: string) => Promise<YubiKeyOtpSettings>;
+  onSaveYubiKeySettings: (keys: string[], nfc: boolean, masterPassword: string) => Promise<YubiKeyOtpSettings>;
+  onSaveYubiKeyApiCredentials: (clientId: string, secretKey: string, masterPassword: string) => Promise<YubiKeyOtpSettings>;
+  onBootstrapYubiKeyApiCredentials: (otp: string, masterPassword: string) => Promise<YubiKeyOtpSettings>;
+  onDisableYubiKey: (masterPassword: string) => Promise<void>;
+  onGetTwoFactorPasskeySettings: (masterPassword: string) => Promise<TwoFactorPasskeySettings>;
+  onCreateTwoFactorPasskey: (name: string, masterPassword: string) => Promise<TwoFactorPasskeySettings>;
+  onDeleteTwoFactorPasskey: (id: number, masterPassword: string) => Promise<TwoFactorPasskeySettings>;
+  onDisableTwoFactorPasskeys: (masterPassword: string) => Promise<void>;
   onGetRecoveryCode: (masterPassword: string) => Promise<string>;
   onGetApiKey: (masterPassword: string) => Promise<string>;
   onRotateApiKey: (masterPassword: string) => Promise<string>;
@@ -116,8 +132,10 @@ export interface AppMainRoutesProps {
   onCreateAccountPasskey: (name: string, masterPassword: string, directUnlock: boolean) => Promise<AccountPasskeyCredential | null>;
   onEnableAccountPasskeyDirectUnlock: (id: string, masterPassword: string) => Promise<void>;
   onDeleteAccountPasskey: (id: string, masterPassword: string) => Promise<void>;
+  onRefreshTwoFactorStatus: () => Promise<void>;
   pendingAuthRequests: AuthRequest[];
   pendingAuthRequestsLoading: boolean;
+  pendingAuthRequestsRefreshing: boolean;
   onRefreshPendingAuthRequests: () => Promise<void>;
   onApproveAuthRequest: (request: AuthRequest) => Promise<void>;
   onDenyAuthRequest: (request: AuthRequest) => Promise<void>;
@@ -130,14 +148,16 @@ export interface AppMainRoutesProps {
   onRevokeDeviceTrust: (device: AuthorizedDevice) => void;
   onTrustDevicePermanently: (device: AuthorizedDevice) => void;
   onRemoveDevice: (device: AuthorizedDevice) => void;
+  onRemoveSelectedDevices: (devices: AuthorizedDevice[]) => void;
   onRevokeAllDeviceTrust: () => void;
   onRemoveAllDevices: () => void;
   onCreateInvite: (hours: number) => Promise<void>;
   onRefreshAdmin: () => void;
+  onDeleteInvalidInvites: () => Promise<void>;
   onDeleteAllInvites: () => Promise<void>;
   onToggleUserStatus: (userId: string, status: 'active' | 'banned') => Promise<void>;
   onDeleteUser: (userId: string) => Promise<void>;
-  onRevokeInvite: (code: string) => Promise<void>;
+  onDeleteInvite: (code: string) => Promise<void>;
   onLoadAuditLogs: (filters: AuditLogFilters) => Promise<AuditLogListResult>;
   onLoadAuditLogSettings: () => Promise<AuditLogSettings>;
   onSaveAuditLogSettings: (settings: AuditLogSettings) => Promise<AuditLogSettings>;
@@ -150,8 +170,8 @@ export interface AppMainRoutesProps {
   onRunRemoteBackup: (masterPassword: string, destinationId?: string | null) => Promise<AdminBackupRunResponse>;
   onListRemoteBackups: (destinationId: string, path: string) => Promise<RemoteBackupBrowserResponse>;
   onDownloadRemoteBackup: (masterPassword: string, destinationId: string, path: string, onProgress?: (percent: number | null) => void) => Promise<void>;
-  onInspectRemoteBackup: (destinationId: string, path: string) => Promise<{ object: 'backup-remote-integrity'; destinationId: string; path: string; fileName: string; integrity: { hasChecksumPrefix: boolean; expectedPrefix: string | null; actualPrefix: string; matches: boolean } }>;
-  onDeleteRemoteBackup: (destinationId: string, path: string) => Promise<void>;
+  onInspectRemoteBackup: (masterPassword: string, destinationId: string, path: string) => Promise<{ object: 'backup-remote-integrity'; destinationId: string; path: string; fileName: string; integrity: { hasChecksumPrefix: boolean; expectedPrefix: string | null; actualPrefix: string; matches: boolean } }>;
+  onDeleteRemoteBackup: (masterPassword: string, destinationId: string, path: string) => Promise<void>;
   onRestoreRemoteBackup: (masterPassword: string, destinationId: string, path: string, replaceExisting?: boolean) => Promise<AdminBackupImportResponse>;
   onRestoreRemoteBackupAllowingChecksumMismatch: (masterPassword: string, destinationId: string, path: string, replaceExisting?: boolean) => Promise<AdminBackupImportResponse>;
 }
@@ -189,6 +209,26 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
 
   return (
     <Switch>
+      <Route path="/security/password-health">
+        <div className="stack">
+          {props.mobileLayout && (
+            <div className="mobile-settings-subhead">
+              <button type="button" className="btn btn-secondary small mobile-settings-back" onClick={() => props.onNavigate(props.settingsHomeRoute)}>
+                <span className="btn-icon" aria-hidden="true">{"<"}</span>
+                {t('txt_back')}
+              </button>
+            </div>
+          )}
+          <Suspense fallback={<RouteContentFallback />}>
+            <PasswordSecurityPage ciphers={props.decryptedCiphers} loading={props.ciphersLoading} />
+          </Suspense>
+        </div>
+      </Route>
+      <Route path="/generator">
+        <Suspense fallback={<RouteContentFallback />}>
+          <PasswordGeneratorPage />
+        </Suspense>
+      </Route>
       <Route path="/sends">
         <Suspense fallback={<RouteContentFallback />}>
           <SendsPage
@@ -262,12 +302,26 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
               <SettingsPage
                 profile={props.profile}
                 totpEnabled={props.totpEnabled}
+                yubikeyEnabled={props.yubikeyEnabled}
+                passkey2faEnabled={props.passkey2faEnabled}
+                themePreference={props.themePreference}
                 lockTimeoutMinutes={props.lockTimeoutMinutes}
                 sessionTimeoutAction={props.sessionTimeoutAction}
+                onThemePreferenceChange={props.onThemePreferenceChange}
+                onVerifyMasterPassword={props.onVerifyMasterPassword}
                 onChangePassword={props.onChangePassword}
                 onSavePasswordHint={props.onSavePasswordHint}
                 onEnableTotp={props.onEnableTotp}
                 onOpenDisableTotp={props.onOpenDisableTotp}
+                onGetYubiKeySettings={props.onGetYubiKeySettings}
+                onSaveYubiKeySettings={props.onSaveYubiKeySettings}
+                onSaveYubiKeyApiCredentials={props.onSaveYubiKeyApiCredentials}
+                onBootstrapYubiKeyApiCredentials={props.onBootstrapYubiKeyApiCredentials}
+                onDisableYubiKey={props.onDisableYubiKey}
+                onGetTwoFactorPasskeySettings={props.onGetTwoFactorPasskeySettings}
+                onCreateTwoFactorPasskey={props.onCreateTwoFactorPasskey}
+                onDeleteTwoFactorPasskey={props.onDeleteTwoFactorPasskey}
+                onDisableTwoFactorPasskeys={props.onDisableTwoFactorPasskeys}
                 onGetRecoveryCode={props.onGetRecoveryCode}
                 onGetApiKey={props.onGetApiKey}
                 onRotateApiKey={props.onRotateApiKey}
@@ -275,6 +329,7 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
                 onCreateAccountPasskey={props.onCreateAccountPasskey}
                 onEnableAccountPasskeyDirectUnlock={props.onEnableAccountPasskeyDirectUnlock}
                 onDeleteAccountPasskey={props.onDeleteAccountPasskey}
+                onRefreshTwoFactorStatus={props.onRefreshTwoFactorStatus}
                 onLockTimeoutChange={props.onLockTimeoutChange}
                 onSessionTimeoutActionChange={props.onSessionTimeoutActionChange}
                 onNotify={props.onNotify}
@@ -287,43 +342,57 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
       </Route>
       <Route path="/settings">
         {props.profile ? (
-          <section className="card mobile-settings-card">
-            <div className="mobile-settings-links">
-              <Link href={props.settingsAccountRoute} className="mobile-settings-link">
-                <SettingsIcon size={18} />
-                <span>{t('nav_account_settings')}</span>
-              </Link>
-              <Link href="/settings/security/device-management" className="mobile-settings-link">
-                <Shield size={18} />
-                <span>{t('nav_device_management')}</span>
-              </Link>
-              <Link href="/settings/domain-rules" className="mobile-settings-link">
-                <Globe2 size={18} />
-                <span>{t('nav_domain_rules')}</span>
-              </Link>
-              <Link href={props.importRoute} className="mobile-settings-link">
-                <ArrowUpDown size={18} />
-                <span>{t('nav_import_export')}</span>
-              </Link>
-              {isAdmin && (
-                <Link href="/admin" className="mobile-settings-link">
-                  <ShieldUser size={18} />
-                  <span>{t('nav_admin_panel')}</span>
+          <section className="card mobile-settings-card settings-home-card">
+            <div className="settings-home-section">
+              <h3>{t('nav_group_tools')}</h3>
+              <div className="mobile-settings-links">
+                <Link href="/security/password-health" className="mobile-settings-link">
+                  <ShieldCheck size={18} />
+                  <span>{t('nav_password_security')}</span>
                 </Link>
-              )}
-              {isAdmin && (
-                <Link href="/logs" className="mobile-settings-link">
-                  <FileClock size={18} />
-                  <span>{t('nav_log_center')}</span>
+                <Link href={props.importRoute} className="mobile-settings-link">
+                  <ArrowUpDown size={18} />
+                  <span>{t('nav_import_export')}</span>
                 </Link>
-              )}
-              {isAdmin && (
-                <Link href="/backup" className="mobile-settings-link">
-                  <Cloud size={18} />
-                  <span>{t('nav_backup_strategy')}</span>
-                </Link>
-              )}
+              </div>
             </div>
+            <div className="settings-home-section">
+              <h3>{t('txt_settings')}</h3>
+              <div className="mobile-settings-links">
+                <Link href={props.settingsAccountRoute} className="mobile-settings-link">
+                  <SettingsIcon size={18} />
+                  <span>{t('nav_account_settings')}</span>
+                </Link>
+                <Link href="/settings/security/device-management" className="mobile-settings-link">
+                  <Shield size={18} />
+                  <span>{t('nav_device_management')}</span>
+                </Link>
+                <Link href="/settings/domain-rules" className="mobile-settings-link">
+                  <Globe2 size={18} />
+                  <span>{t('nav_domain_rules')}</span>
+                </Link>
+              </div>
+            </div>
+            {isAdmin && (
+              <div className="settings-home-section">
+                <h3>{t('nav_group_system_management')}</h3>
+                <div className="mobile-settings-links">
+                  <Link href="/backup" className="mobile-settings-link">
+                    <Cloud size={18} />
+                    <span>{t('nav_backup_strategy')}</span>
+                  </Link>
+                  <Link href="/admin" className="mobile-settings-link">
+                    <ShieldUser size={18} />
+                    <span>{t('nav_admin_panel')}</span>
+                  </Link>
+                  <Link href="/logs" className="mobile-settings-link">
+                    <FileClock size={18} />
+                    <span>{t('nav_log_center')}</span>
+                  </Link>
+                </div>
+              </div>
+            )}
+            <div className="settings-home-spacer" />
             <button type="button" className="btn btn-secondary mobile-settings-logout" onClick={props.onLogout}>
               <LogOut size={14} className="btn-icon" />
               {t('txt_sign_out')}
@@ -347,10 +416,12 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
             <Suspense fallback={<RouteContentFallback />}>
               <SecurityDevicesPage
                 devices={props.authorizedDevices}
+                currentDeviceIdentifier={props.currentDeviceIdentifier}
                 loading={props.authorizedDevicesLoading}
                 error={props.authorizedDevicesError}
                 pendingAuthRequests={props.pendingAuthRequests}
                 pendingAuthRequestsLoading={props.pendingAuthRequestsLoading}
+                pendingAuthRequestsRefreshing={props.pendingAuthRequestsRefreshing}
                 onRefresh={() => void props.onRefreshAuthorizedDevices()}
                 onRefreshPendingAuthRequests={props.onRefreshPendingAuthRequests}
                 onApproveAuthRequest={props.onApproveAuthRequest}
@@ -359,6 +430,7 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
                 onRevokeTrust={props.onRevokeDeviceTrust}
                 onTrustPermanently={props.onTrustDevicePermanently}
                 onRemoveDevice={props.onRemoveDevice}
+                onRemoveSelectedDevices={props.onRemoveSelectedDevices}
                 onRevokeAll={props.onRevokeAllDeviceTrust}
                 onRemoveAll={props.onRemoveAllDevices}
               />
@@ -407,10 +479,11 @@ export default function AppMainRoutes(props: AppMainRoutesProps) {
               error={props.adminError}
               onRefresh={props.onRefreshAdmin}
               onCreateInvite={props.onCreateInvite}
+              onDeleteInvalidInvites={props.onDeleteInvalidInvites}
               onDeleteAllInvites={props.onDeleteAllInvites}
               onToggleUserStatus={props.onToggleUserStatus}
               onDeleteUser={props.onDeleteUser}
-              onRevokeInvite={props.onRevokeInvite}
+              onDeleteInvite={props.onDeleteInvite}
             />
           </Suspense>
         </div>

@@ -46,6 +46,24 @@
     grid-template-columns: 1fr;
   }
 
+  .backup-browser-head {
+    display: none;
+  }
+
+  .backup-browser-meta {
+    text-align: left;
+  }
+
+  .backup-browser-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .backup-browser-nav {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .settings-twofactor-grid {
     grid-template-columns: 1fr;
   }
@@ -216,7 +234,7 @@
 
   .mobile-tabbar {
     @apply grid items-center gap-1.5;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     min-height: var(--mobile-tabbar-height);
     padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--line);
@@ -407,6 +425,20 @@
 
   .duplicate-mode-head-menu .mobile-vault-filter-menu {
     min-width: max(100%, 190px);
+  }
+
+  .list-head .mobile-duplicate-toolbar {
+    @apply flex min-w-0 items-center gap-1.5;
+    flex: none;
+  }
+
+  .list-head .mobile-duplicate-mode-select-wrap {
+    max-width: 130px;
+    flex-shrink: 0;
+  }
+
+  .list-head .mobile-duplicate-mode-select-wrap .mobile-vault-filter-trigger {
+    @apply w-full;
   }
 
   .toolbar.actions {
@@ -752,9 +784,42 @@
   }
 
   .settings-modules-grid,
+  .settings-category-layout,
   .domain-rules-grid,
   .password-settings-grid {
     grid-template-columns: 1fr;
+  }
+
+  .settings-category-tabs {
+    position: static;
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    width: 100%;
+    margin-inline: 0;
+    padding: 4px;
+    scrollbar-width: none;
+  }
+
+  .settings-category-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .settings-category-tab {
+    flex: 0 0 auto;
+    min-height: 38px;
+    padding: 0 12px;
+    white-space: nowrap;
+  }
+
+  .settings-category-panel {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .settings-category-tab.active {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 22%, var(--line));
   }
 
   .import-export-panel .actions .btn,
@@ -943,6 +1008,51 @@
 }
 
 @media (max-width: 640px) {
+  .settings-category-layout {
+    gap: 12px;
+  }
+
+  .settings-category-panel {
+    padding: 16px;
+    border-radius: 14px;
+  }
+
+  .settings-page-categorized {
+    padding: 0;
+  }
+
+  .settings-section-stack {
+    gap: 0;
+  }
+
+  .settings-submodule {
+    padding: 14px 0;
+    border-radius: 0;
+  }
+
+  .settings-submodule.two-step-recovery-warning {
+    padding: 14px;
+  }
+
+  .two-step-provider-row {
+    grid-template-columns: 42px minmax(0, 1fr) auto;
+    gap: 10px;
+  }
+
+  .two-step-provider-icon {
+    width: 42px;
+    height: 42px;
+  }
+
+  .two-step-provider-row .btn {
+    grid-column: 3;
+    justify-self: end;
+  }
+
+  .totp-manage-dialog-body .totp-grid {
+    grid-template-columns: 1fr;
+  }
+
   .settings-modules-grid {
     gap: 8px;
   }
@@ -956,7 +1066,8 @@
     padding: 0;
   }
 
-  .settings-module h3 {
+  .settings-module h3,
+  .settings-submodule h3 {
     margin-bottom: 8px;
     font-size: 15px;
     line-height: 1.25;
@@ -983,11 +1094,13 @@
   }
 
   .settings-module .field,
+  .settings-submodule .field,
   .auth-card .field {
     margin-bottom: 8px;
   }
 
   .settings-module .field > span,
+  .settings-submodule .field > span,
   .auth-card .field > span {
     margin-top: 0;
     margin-bottom: 4px;
@@ -996,19 +1109,22 @@
   }
 
   .settings-module .field-grid,
+  .settings-submodule .field-grid,
   .auth-card .field-grid,
   .session-timeout-fields {
     gap: 8px;
   }
 
-  .settings-module .input {
+  .settings-module .input,
+  .settings-submodule .input {
     height: 42px;
     border-radius: 12px;
     padding: 8px 11px;
     font-size: 15px;
   }
 
-  .settings-module select.input {
+  .settings-module select.input,
+  .settings-submodule select.input {
     padding-top: 0;
     padding-bottom: 0;
     padding-right: 30px;
@@ -1017,18 +1133,21 @@
       calc(100% - 9px) calc(50% - 3px);
   }
 
-  .settings-module .field-help {
+  .settings-module .field-help,
+  .settings-submodule .field-help {
     margin-top: 5px;
     font-size: 12px;
     line-height: 1.35;
   }
 
   .settings-module .btn,
+  .settings-submodule .btn,
   .auth-card .btn:not(.full) {
     margin-top: 2px;
   }
 
-  .settings-module .actions {
+  .settings-module .actions,
+  .settings-submodule .actions {
     gap: 7px;
   }
 
@@ -1036,6 +1155,17 @@
     grid-template-columns: 1fr;
     gap: 8px;
     padding: 10px;
+  }
+
+  .two-factor-passkey-row {
+    grid-template-columns: 2rem minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
+  .two-factor-passkey-row .btn {
+    grid-column: 3;
+    justify-self: end;
+    white-space: nowrap;
   }
 
   .account-passkey-status {
@@ -1047,18 +1177,31 @@
     width: 100%;
   }
 
-  .settings-module .totp-grid {
+  .two-factor-passkey-register-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .two-factor-passkey-register-row .btn {
+    width: 100%;
+  }
+
+  .settings-module .totp-grid,
+  .settings-submodule .totp-grid {
     gap: 8px;
     margin-bottom: 8px;
   }
 
-  .settings-module .totp-qr {
+  .settings-module .totp-qr,
+  .settings-submodule .totp-qr {
     min-height: 132px;
     padding: 8px;
   }
 
   .settings-module .totp-qr svg,
-  .settings-module .totp-qr img {
+  .settings-module .totp-qr img,
+  .settings-submodule .totp-qr svg,
+  .settings-submodule .totp-qr img {
     width: 118px;
     height: 118px;
   }
@@ -1108,6 +1251,24 @@
   .backup-browser-row,
   .field-grid {
     grid-template-columns: 1fr;
+  }
+
+  .backup-browser-head {
+    display: none;
+  }
+
+  .backup-browser-meta {
+    text-align: left;
+  }
+
+  .backup-browser-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .backup-browser-nav {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .backup-grid {

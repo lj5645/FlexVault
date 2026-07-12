@@ -1,4 +1,4 @@
-import { Env, Send, SendAuthType, SendResponse, SendType, DEFAULT_DEV_SECRET } from '../types';
+import { Env, Send, SendAuthType, SendResponse, SendType } from '../types';
 import {
   notifyUserSendCreate,
   notifyUserSendDelete,
@@ -155,7 +155,15 @@ export function formatSize(bytes: number): string {
 
 export function parseDate(raw: unknown): Date | null {
   if (typeof raw !== 'string' || !raw.trim()) return null;
-  const date = new Date(raw);
+  let value = raw.trim();
+  if (!/[zZ]$/.test(value) && !/[+\-]\d{2}:?\d{2}$/.test(value)) {
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)) {
+      value += 'Z';
+    } else if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(value)) {
+      value = value.replace(' ', 'T') + 'Z';
+    }
+  }
+  const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
   return date;
 }
@@ -371,7 +379,7 @@ export function hasEmailAuth(send: Send): boolean {
 
 export function getSafeJwtSecret(env: Env): { ok: true; secret: string } | { ok: false; response: Response } {
   const secret = (env.JWT_SECRET || '').trim();
-  if (!secret || secret.length < LIMITS.auth.jwtSecretMinLength || secret === DEFAULT_DEV_SECRET) {
+  if (!secret || secret.length < LIMITS.auth.jwtSecretMinLength) {
     return { ok: false, response: errorResponse('Server configuration error', 500) };
   }
   return { ok: true, secret };
@@ -434,8 +442,8 @@ export type PublicSendAccessValidationResult =
   | { ok: true }
   | { ok: false; response: Response; reason: 'email_auth_unsupported' | 'password_missing' | 'invalid_password' };
 
-export function sendPasswordLimitKey(clientIdentifier: string): string {
-  return `${clientIdentifier}:${SEND_PASSWORD_LIMIT_SCOPE}`;
+export function sendPasswordLimitKey(clientIdentifier: string, sendId: string): string {
+  return `${clientIdentifier}:${SEND_PASSWORD_LIMIT_SCOPE}:${String(sendId || '').trim() || 'unknown-send'}`;
 }
 
 function sendPasswordLockMessage(retryAfterSeconds: number): string {
@@ -464,7 +472,11 @@ export function sendPasswordLockedOAuthResponse(retryAfterSeconds: number): Resp
 
 export async function validatePublicSendAccess(send: Send, body: unknown): Promise<PublicSendAccessValidationResult> {
   if (hasEmailAuth(send)) {
-    return { ok: false, response: errorResponse(SEND_INACCESSIBLE_MSG, 404), reason: 'email_auth_unsupported' };
+    return {
+      ok: false,
+      response: errorResponse('Send email verification is not supported by this server.', 501),
+      reason: 'email_auth_unsupported',
+    };
   }
 
   if (!send.passwordHash) return { ok: true };

@@ -1,4 +1,4 @@
-import { Env, User, DEFAULT_DEV_SECRET } from '../types';
+import { Env, User } from '../types';
 import { StorageService } from '../services/storage';
 import { AuthService } from '../services/auth';
 import { RateLimitService, getClientIdentifier } from '../services/ratelimit';
@@ -6,14 +6,20 @@ import { auditRequestMetadata, writeAuditEvent, safeWriteAuditEvent } from '../s
 import { jsonResponse, errorResponse } from '../utils/response';
 import { generateUUID } from '../utils/uuid';
 import { LIMITS } from '../config/limits';
-import { isTotpEnabled, verifyTotpToken } from '../utils/totp';
+import { hashApiKey } from '../utils/api-key';
+import { findMatchingTotpCounter, isTotpEnabled } from '../utils/totp';
 import { createRecoveryCode, recoveryCodeEquals } from '../utils/recovery-code';
 import { buildAccountKeys } from '../utils/user-decryption';
 import { buildProfileResponse } from '../utils/profile-response';
+import { isYubiKeyEnabled, isYubiKeyPublicId, requestYubicoApiCredentials, verifyYubicoOtp, yubicoCredentialsFromEnv, yubiKeyPublicIdFromOtp, type YubicoApiCredentials } from '../utils/yubico-otp';
 
 const TWO_FACTOR_PROVIDER_AUTHENTICATOR = 0;
+const TWO_FACTOR_PROVIDER_YUBIKEY = 3;
+const TWO_FACTOR_PROVIDER_WEBAUTHN = 7;
 const TOTP_USER_VERIFICATION_TOKEN_TTL_MS = 10 * 60 * 1000;
 const TOTP_BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+const YUBICO_CLIENT_ID_CONFIG_KEY = 'globalSettings__yubico__clientId';
+const YUBICO_KEY_CONFIG_KEY = 'globalSettings__yubico__key';
 
 // CONTRACT:
 // users.master_password_hash is server-side login verification only. It does
@@ -36,6 +42,9 @@ function looksLikeEncString(value: string): boolean {
  */
 function validateKdfParams(kdfType: number | undefined, kdfIterations: number | undefined, kdfMemory?: number | undefined, kdfParallelism?: number | undefined): string | null {
   const type = kdfType ?? 0;
+  if (type !== 0 && type !== 1) {
+    return 'KDF type must be PBKDF2-SHA256 or Argon2id';
+  }
   if (type === 0) {
     // PBKDF2-SHA256: minimum 100 000 iterations
     if (typeof kdfIterations === 'number' && kdfIterations < 100_000) {
@@ -149,10 +158,9 @@ function normalizeMasterPasswordHint(input: string | null | undefined): string |
   return normalized ? normalized : null;
 }
 
-function jwtSecretUnsafeReason(env: Env): 'missing' | 'default' | 'too_short' | null {
+function jwtSecretUnsafeReason(env: Env): 'missing' | 'too_short' | null {
   const secret = (env.JWT_SECRET || '').trim();
   if (!secret) return 'missing';
-  if (secret === DEFAULT_DEV_SECRET) return 'default';
   if (secret.length < LIMITS.auth.jwtSecretMinLength) return 'too_short';
   return null;
 }
@@ -191,6 +199,31 @@ function readNestedNumber(source: unknown, path: string[]): number | undefined {
     current = (current as Record<string, unknown>)[key];
   }
   return typeof current === 'number' ? current : undefined;
+}
+
+async function getStoredYubicoCredentials(storage: StorageService, env: Env): Promise<YubicoApiCredentials | null> {
+  const fromEnv = yubicoCredentialsFromEnv(env);
+  if (fromEnv) return fromEnv;
+  const clientId = String(await storage.getConfigValue(YUBICO_CLIENT_ID_CONFIG_KEY) || '').trim();
+  if (!clientId) return null;
+  const secretKey = String(await storage.getConfigValue(YUBICO_KEY_CONFIG_KEY) || '').trim();
+  return { clientId, secretKey };
+}
+
+async function ensureStoredYubicoCredentials(
+  storage: StorageService,
+  env: Env,
+  email: string,
+  otp: string
+): Promise<YubicoApiCredentials | null> {
+  const existing = await getStoredYubicoCredentials(storage, env);
+  if (existing) return existing;
+
+  const credentials = await requestYubicoApiCredentials(email, otp);
+  if (!credentials) return null;
+  await storage.setConfigValue(YUBICO_CLIENT_ID_CONFIG_KEY, credentials.clientId);
+  await storage.setConfigValue(YUBICO_KEY_CONFIG_KEY, credentials.secretKey);
+  return credentials;
 }
 
 async function readRequestBody(request: Request): Promise<Record<string, unknown>> {
@@ -241,9 +274,7 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
   if (unsafe) {
     const message = unsafe === 'missing'
       ? 'JWT_SECRET is not set'
-      : unsafe === 'default'
-        ? 'JWT_SECRET is using the default/sample value. Please change it.'
-        : 'JWT_SECRET must be at least 32 characters';
+      : 'JWT_SECRET must be at least 32 characters';
     return errorResponse(message, 400);
   }
 
@@ -321,9 +352,15 @@ export async function handleRegister(request: Request, env: Env): Promise<Respon
     securityStamp: generateUUID(),
     role: 'user',
     status: 'active',
-    verifyDevices: true,
+    verifyDevices: false, // new-device verification requires email delivery (not available)
     totpSecret: null,
     totpRecoveryCode: null,
+    yubikeyKey1: null,
+    yubikeyKey2: null,
+    yubikeyKey3: null,
+    yubikeyKey4: null,
+    yubikeyKey5: null,
+    yubikeyNfc: false,
     apiKey: null,
     createdAt: now,
     updatedAt: now,
@@ -414,7 +451,7 @@ export async function handleGetPasswordHint(request: Request, env: Env): Promise
   }
 
   const rateLimit = new RateLimitService(env.DB);
-  const minuteBudget = await rateLimit.consumeBudgetWithWindow(
+  const minuteBudget = await rateLimit.consumeStrictBudgetWithWindow(
     `${clientIdentifier}:password-hint`,
     LIMITS.rateLimit.passwordHintRequestsPerMinute,
     60
@@ -436,7 +473,7 @@ export async function handleGetPasswordHint(request: Request, env: Env): Promise
     );
   }
 
-  const hourlyBudget = await rateLimit.consumeBudgetWithWindow(
+  const hourlyBudget = await rateLimit.consumeStrictBudgetWithWindow(
     `${clientIdentifier}:password-hint-hour`,
     LIMITS.rateLimit.passwordHintRequestsPerHour,
     60 * 60
@@ -516,51 +553,31 @@ export async function handleUpdateProfile(request: Request, env: Env, userId: st
 }
 
 // PUT/POST /api/accounts/verify-devices
+// New-device verification requires an email delivery channel which NodeWarden
+// does not provide. This endpoint always rejects the request so clients receive
+// clear feedback that the feature is unavailable rather than silently ignoring
+// the user's preference.
 export async function handleSetVerifyDevices(request: Request, env: Env, userId: string): Promise<Response> {
   const storage = new StorageService(env.DB);
   const auth = new AuthService(env);
   const user = await storage.getUserById(userId);
   if (!user) return errorResponse('User not found', 404);
 
-  let body: {
-    secret?: string;
-    masterPasswordHash?: string;
-    verifyDevices?: boolean;
-    VerifyDevices?: boolean;
-  };
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse('Invalid JSON', 400);
-  }
-
-  const verifyDevices = typeof body.verifyDevices === 'boolean' ? body.verifyDevices : body.VerifyDevices;
-  if (typeof verifyDevices !== 'boolean') {
-    return errorResponse('verifyDevices must be true or false', 400);
-  }
-
-  const verified = await verifyUserSecret(auth, user, body.secret || body.masterPasswordHash);
-  if (!verified) {
-    return errorResponse('User verification failed.', 400);
-  }
-
-  user.verifyDevices = verifyDevices;
-  user.updatedAt = new Date().toISOString();
-  await storage.saveUser(user);
+  // Log the attempt for audit purposes, but do not change state.
   await writeAuditEvent(storage, {
     actorUserId: user.id,
-    action: 'account.verify_devices.update',
+    action: 'account.verify_devices.update.rejected',
     category: 'security',
-    level: 'security',
+    level: 'info',
     targetType: 'user',
     targetId: user.id,
     metadata: {
-      verifyDevices: user.verifyDevices,
+      reason: 'new-device verification is not supported (no email delivery channel)',
       ...auditRequestMetadata(request),
     },
   });
 
-  return new Response(null, { status: 200 });
+  return errorResponse('New device verification is not available on this server. Enable TOTP or WebAuthn two-factor authentication instead.', 400);
 }
 
 // GET /api/accounts/keys
@@ -700,6 +717,11 @@ export async function handleChangePassword(request: Request, env: Env, userId: s
   const nextKdfParallelism = body.kdfParallelism ?? readNestedNumber(body, ['unlockData', 'kdf', 'parallelism']);
   const kdfErr = validateKdfParams(nextKdf, nextKdfIterations, nextKdfMemory, nextKdfParallelism);
   if (kdfErr) return errorResponse(kdfErr, 400);
+  const shouldUpdateHint = typeof body.masterPasswordHint === 'string' || body.masterPasswordHint === null;
+  const nextMasterPasswordHint = shouldUpdateHint ? normalizeMasterPasswordHint(body.masterPasswordHint) : undefined;
+  if (nextMasterPasswordHint && nextMasterPasswordHint.length > 120) {
+    return errorResponse('masterPasswordHint must be 120 characters or fewer', 400);
+  }
 
   user.masterPasswordHash = await auth.hashPasswordServer(newMasterPasswordHash, user.email);
   if (nextKey) user.key = nextKey;
@@ -709,8 +731,8 @@ export async function handleChangePassword(request: Request, env: Env, userId: s
   if (typeof nextKdfIterations === 'number') user.kdfIterations = nextKdfIterations;
   if (typeof nextKdfMemory === 'number') user.kdfMemory = nextKdfMemory;
   if (typeof nextKdfParallelism === 'number') user.kdfParallelism = nextKdfParallelism;
-  if (typeof body.masterPasswordHint === 'string' || body.masterPasswordHint === null) {
-    user.masterPasswordHint = body.masterPasswordHint;
+  if (shouldUpdateHint) {
+    user.masterPasswordHint = nextMasterPasswordHint ?? null;
   }
   user.securityStamp = generateUUID();
   user.updatedAt = new Date().toISOString();
@@ -764,6 +786,44 @@ function twoFactorAuthenticatorResponse(
   };
 }
 
+function yubiKeyResponse(user: User): Record<string, unknown> {
+  return {
+    Enabled: isYubiKeyEnabled(user),
+    Key1: user.yubikeyKey1,
+    Key2: user.yubikeyKey2,
+    Key3: user.yubikeyKey3,
+    Key4: user.yubikeyKey4,
+    Key5: user.yubikeyKey5,
+    Nfc: !!user.yubikeyNfc,
+    Object: 'twoFactorYubiKey',
+  };
+}
+
+// New-device verification requires an email delivery channel to send OTP
+// challenges to unknown devices. NodeWarden does not integrate with an email
+// provider, so this feature is intentionally unavailable. The settings
+// response always reports disabled regardless of any legacy DB value.
+function deviceVerificationSettingsResponse(_user: User): Record<string, unknown> {
+  return {
+    Enabled: false,
+    enabled: false,
+    VerifyDevices: false,
+    verifyDevices: false,
+    Object: 'deviceVerificationSettings',
+    object: 'deviceVerificationSettings',
+  };
+}
+
+async function yubiKeySettingsResponse(storage: StorageService, env: Env, user: User): Promise<Record<string, unknown>> {
+  const credentials = await getStoredYubicoCredentials(storage, env);
+  return {
+    ...yubiKeyResponse(user),
+    YubicoConfigured: !!credentials?.clientId,
+    YubicoClientId: credentials?.clientId ?? '',
+    YubicoSecretKey: credentials?.secretKey ?? '',
+  };
+}
+
 // GET /api/two-factor
 export async function handleGetTwoFactorProviders(request: Request, env: Env, userId: string): Promise<Response> {
   void request;
@@ -771,9 +831,11 @@ export async function handleGetTwoFactorProviders(request: Request, env: Env, us
   const user = await storage.getUserById(userId);
   if (!user) return errorResponse('User not found', 404);
 
-  const data = user.totpSecret
-    ? [twoFactorProviderResponse(TWO_FACTOR_PROVIDER_AUTHENTICATOR, true)]
-    : [];
+  const data = [];
+  if (isTotpEnabled(user.totpSecret)) data.push(twoFactorProviderResponse(TWO_FACTOR_PROVIDER_AUTHENTICATOR, true));
+  if (isYubiKeyEnabled(user)) data.push(twoFactorProviderResponse(TWO_FACTOR_PROVIDER_YUBIKEY, true));
+  const webAuthnCredentials = await storage.getAccountPasskeyCredentialsByUserId(user.id, 'twoFactor');
+  if (webAuthnCredentials.length > 0) data.push(twoFactorProviderResponse(TWO_FACTOR_PROVIDER_WEBAUTHN, true));
 
   return jsonResponse({
     Data: data,
@@ -805,6 +867,77 @@ export async function handleGetTwoFactorAuthenticator(request: Request, env: Env
   return jsonResponse(twoFactorAuthenticatorResponse(!!user.totpSecret, key, userVerificationToken));
 }
 
+// POST /api/two-factor/get-yubikey
+export async function handleGetTwoFactorYubiKey(request: Request, env: Env, userId: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const auth = new AuthService(env);
+  const user = await storage.getUserById(userId);
+  if (!user) return errorResponse('User not found', 404);
+
+  let body: Record<string, unknown>;
+  try {
+    body = await readRequestBody(request);
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+
+  const secret = readBodyString(body, ['masterPasswordHash', 'MasterPasswordHash', 'otp', 'OTP', 'secret', 'Secret']);
+  const verified = await verifyUserSecret(auth, user, secret);
+  if (!verified) return errorResponse('User verification failed.', 400);
+
+  return jsonResponse(await yubiKeySettingsResponse(storage, env, user));
+}
+
+// POST /api/two-factor/get-device-verification-settings
+export async function handleGetDeviceVerificationSettings(request: Request, env: Env, userId: string): Promise<Response> {
+  void request;
+  const storage = new StorageService(env.DB);
+  const user = await storage.getUserById(userId);
+  if (!user) return errorResponse('User not found', 404);
+  return jsonResponse(deviceVerificationSettingsResponse(user));
+}
+
+// PUT/POST /api/two-factor/device-verification-settings
+// New-device verification is not supported (no email delivery channel).
+// Reject any attempt to enable it; always return disabled state.
+export async function handlePutDeviceVerificationSettings(request: Request, env: Env, userId: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const user = await storage.getUserById(userId);
+  if (!user) return errorResponse('User not found', 404);
+
+  let body: Record<string, unknown>;
+  try {
+    body = await readRequestBody(request);
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+
+  const rawEnabled = body.enabled ?? body.Enabled ?? body.verifyDevices ?? body.VerifyDevices;
+
+  // Log the attempt for audit purposes — never change state.
+  await writeAuditEvent(storage, {
+    actorUserId: user.id,
+    action: 'account.verify_devices.update.rejected',
+    category: 'security',
+    level: 'info',
+    targetType: 'user',
+    targetId: user.id,
+    metadata: {
+      requested: rawEnabled,
+      reason: 'new-device verification is not supported (no email delivery channel)',
+      source: 'two-factor.device-verification-settings',
+      ...auditRequestMetadata(request),
+    },
+  });
+
+  if (rawEnabled === true) {
+    return errorResponse('New device verification is not available on this server. Enable TOTP or WebAuthn two-factor authentication instead.', 400);
+  }
+
+  // Setting to false is the only supported state — return it.
+  return jsonResponse(deviceVerificationSettingsResponse(user));
+}
+
 // PUT/POST /api/two-factor/authenticator
 export async function handlePutTwoFactorAuthenticator(request: Request, env: Env, userId: string): Promise<Response> {
   const storage = new StorageService(env.DB);
@@ -828,7 +961,10 @@ export async function handlePutTwoFactorAuthenticator(request: Request, env: Env
     return errorResponse('User verification failed.', 400);
   }
   if (!isTotpEnabled(key)) return errorResponse('Invalid TOTP secret', 400);
-  if (!await verifyTotpToken(key, token)) return errorResponse('Invalid token.', 400);
+  const matchedCounter = await findMatchingTotpCounter(key, token);
+  if (matchedCounter == null || !await storage.consumeTotpLoginCounter(user.id, matchedCounter)) {
+    return errorResponse('Invalid token.', 400);
+  }
 
   user.totpSecret = key;
   if (!user.totpRecoveryCode) {
@@ -851,6 +987,141 @@ export async function handlePutTwoFactorAuthenticator(request: Request, env: Env
   return jsonResponse(twoFactorAuthenticatorResponse(true, key));
 }
 
+// PUT/POST /api/two-factor/yubikey
+export async function handlePutTwoFactorYubiKey(request: Request, env: Env, userId: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const auth = new AuthService(env);
+  const user = await storage.getUserById(userId);
+  if (!user) return errorResponse('User not found', 404);
+
+  let body: Record<string, unknown>;
+  try {
+    body = await readRequestBody(request);
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+
+  const secret = readBodyString(body, ['masterPasswordHash', 'MasterPasswordHash', 'otp', 'OTP', 'secret', 'Secret']);
+  const verified = await verifyUserSecret(auth, user, secret);
+  if (!verified) return errorResponse('User verification failed.', 400);
+
+  const keys = [
+    readBodyString(body, ['key1', 'Key1']),
+    readBodyString(body, ['key2', 'Key2']),
+    readBodyString(body, ['key3', 'Key3']),
+    readBodyString(body, ['key4', 'Key4']),
+    readBodyString(body, ['key5', 'Key5']),
+  ];
+  const publicIds: Array<string | null> = [];
+  let credentials = await getStoredYubicoCredentials(storage, env);
+  let apiKeyBootstrapOtpIndex: number | null = null;
+  for (const key of keys) {
+    const trimmed = key.trim();
+    if (!trimmed) {
+      publicIds.push(null);
+      continue;
+    }
+    const publicId = yubiKeyPublicIdFromOtp(trimmed);
+    if (!publicId) return errorResponse('Invalid YubiKey OTP.', 400);
+    if (isYubiKeyPublicId(trimmed)) {
+      publicIds.push(publicId);
+      continue;
+    }
+    if (!credentials) {
+      credentials = await ensureStoredYubicoCredentials(storage, env, user.email, trimmed);
+      if (!credentials) return errorResponse('Unable to initialize Yubico validation credentials.', 400);
+      apiKeyBootstrapOtpIndex = publicIds.length;
+    }
+    if (apiKeyBootstrapOtpIndex !== publicIds.length && !await verifyYubicoOtp(env, trimmed, credentials)) {
+      return errorResponse('Invalid YubiKey OTP.', 400);
+    }
+    publicIds.push(publicId);
+  }
+  if (!publicIds.some(Boolean)) return errorResponse('At least one YubiKey OTP is required.', 400);
+
+  user.yubikeyKey1 = publicIds[0] ?? null;
+  user.yubikeyKey2 = publicIds[1] ?? null;
+  user.yubikeyKey3 = publicIds[2] ?? null;
+  user.yubikeyKey4 = publicIds[3] ?? null;
+  user.yubikeyKey5 = publicIds[4] ?? null;
+  user.yubikeyNfc = !!(body.nfc ?? body.Nfc);
+  if (!user.totpRecoveryCode) {
+    user.totpRecoveryCode = createRecoveryCode();
+  }
+  user.updatedAt = new Date().toISOString();
+  await storage.saveUser(user);
+  await storage.deleteRefreshTokensByUserId(user.id);
+  AuthService.invalidateUserCache(user.id);
+  await writeAuditEvent(storage, {
+    actorUserId: user.id,
+    action: 'account.yubikey.enable',
+    category: 'security',
+    level: 'security',
+    targetType: 'user',
+    targetId: user.id,
+    metadata: auditRequestMetadata(request),
+  });
+
+  return jsonResponse(await yubiKeySettingsResponse(storage, env, user));
+}
+
+// PUT/POST /api/two-factor/yubikey/config
+export async function handlePutTwoFactorYubiKeyConfig(request: Request, env: Env, userId: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const auth = new AuthService(env);
+  const user = await storage.getUserById(userId);
+  if (!user) return errorResponse('User not found', 404);
+
+  let body: Record<string, unknown>;
+  try {
+    body = await readRequestBody(request);
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+
+  const secret = readBodyString(body, ['masterPasswordHash', 'MasterPasswordHash', 'otp', 'OTP', 'secret', 'Secret']);
+  const verified = await verifyUserSecret(auth, user, secret);
+  if (!verified) return errorResponse('User verification failed.', 400);
+
+  const clientId = readBodyString(body, ['yubicoClientId', 'YubicoClientId', 'clientId', 'ClientId']).trim();
+  const secretKey = readBodyString(body, ['yubicoSecretKey', 'YubicoSecretKey', 'secretKey', 'SecretKey']).trim();
+  if (!clientId) return errorResponse('Yubico Client ID is required.', 400);
+
+  await storage.setConfigValue(YUBICO_CLIENT_ID_CONFIG_KEY, clientId);
+  await storage.setConfigValue(YUBICO_KEY_CONFIG_KEY, secretKey);
+
+  return jsonResponse(await yubiKeySettingsResponse(storage, env, user));
+}
+
+// POST /api/two-factor/yubikey/bootstrap
+export async function handleBootstrapTwoFactorYubiKeyConfig(request: Request, env: Env, userId: string): Promise<Response> {
+  const storage = new StorageService(env.DB);
+  const auth = new AuthService(env);
+  const user = await storage.getUserById(userId);
+  if (!user) return errorResponse('User not found', 404);
+
+  let body: Record<string, unknown>;
+  try {
+    body = await readRequestBody(request);
+  } catch {
+    return errorResponse('Invalid JSON', 400);
+  }
+
+  const secret = readBodyString(body, ['masterPasswordHash', 'MasterPasswordHash', 'secret', 'Secret']);
+  const verified = await verifyUserSecret(auth, user, secret);
+  if (!verified) return errorResponse('User verification failed.', 400);
+
+  const otp = readBodyString(body, ['otp', 'OTP', 'token', 'Token']).trim();
+  if (!yubiKeyPublicIdFromOtp(otp)) return errorResponse('Invalid YubiKey OTP.', 400);
+  const credentials = await requestYubicoApiCredentials(user.email, otp);
+  if (!credentials) return errorResponse('Unable to initialize Yubico validation credentials.', 400);
+
+  await storage.setConfigValue(YUBICO_CLIENT_ID_CONFIG_KEY, credentials.clientId);
+  await storage.setConfigValue(YUBICO_KEY_CONFIG_KEY, credentials.secretKey);
+
+  return jsonResponse(await yubiKeySettingsResponse(storage, env, user));
+}
+
 // DELETE /api/two-factor/authenticator and PUT/POST /api/two-factor/disable
 export async function handleDisableTwoFactorProvider(request: Request, env: Env, userId: string): Promise<Response> {
   const storage = new StorageService(env.DB);
@@ -867,30 +1138,40 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
 
   const typeRaw = body.type ?? body.Type ?? TWO_FACTOR_PROVIDER_AUTHENTICATOR;
   const type = typeof typeRaw === 'number' ? typeRaw : Number.parseInt(String(typeRaw), 10);
-  if (type !== TWO_FACTOR_PROVIDER_AUTHENTICATOR) {
+  if (![TWO_FACTOR_PROVIDER_AUTHENTICATOR, TWO_FACTOR_PROVIDER_YUBIKEY, TWO_FACTOR_PROVIDER_WEBAUTHN].includes(type)) {
     return errorResponse('Two-factor provider is not supported by this server.', 400);
   }
 
-  const key = normalizeTotpSecret(readBodyString(body, ['key', 'Key']));
-  const userVerificationToken = readBodyString(body, ['userVerificationToken', 'UserVerificationToken']);
   const secret = readBodyString(body, ['masterPasswordHash', 'MasterPasswordHash', 'otp', 'OTP', 'secret', 'Secret']);
-  let verified = false;
-  if (key && userVerificationToken) {
-    verified = await verifyTotpUserVerificationToken(env, user, key, userVerificationToken);
-  }
-  if (!verified) {
-    verified = await verifyUserSecret(auth, user, secret);
-  }
+  const verified = await verifyUserSecret(auth, user, secret);
   if (!verified) return errorResponse('User verification failed.', 400);
 
-  user.totpSecret = null;
+  if (type === TWO_FACTOR_PROVIDER_AUTHENTICATOR) {
+    user.totpSecret = null;
+  } else if (type === TWO_FACTOR_PROVIDER_YUBIKEY) {
+    user.yubikeyKey1 = null;
+    user.yubikeyKey2 = null;
+    user.yubikeyKey3 = null;
+    user.yubikeyKey4 = null;
+    user.yubikeyKey5 = null;
+    user.yubikeyNfc = false;
+  } else {
+    const credentials = await storage.getAccountPasskeyCredentialsByUserId(user.id, 'twoFactor');
+    for (const credential of credentials) {
+      await storage.deleteAccountPasskeyCredential(user.id, credential.id, 'twoFactor');
+    }
+  }
   user.updatedAt = new Date().toISOString();
   await storage.saveUser(user);
   await storage.deleteRefreshTokensByUserId(user.id);
   AuthService.invalidateUserCache(user.id);
   await writeAuditEvent(storage, {
     actorUserId: user.id,
-    action: 'account.totp.disable',
+    action: type === TWO_FACTOR_PROVIDER_AUTHENTICATOR
+      ? 'account.totp.disable'
+      : type === TWO_FACTOR_PROVIDER_YUBIKEY
+        ? 'account.yubikey.disable'
+        : 'account.webauthn_2fa.disable',
     category: 'security',
     level: 'security',
     targetType: 'user',
@@ -898,7 +1179,7 @@ export async function handleDisableTwoFactorProvider(request: Request, env: Env,
     metadata: auditRequestMetadata(request),
   });
 
-  return jsonResponse(twoFactorProviderResponse(TWO_FACTOR_PROVIDER_AUTHENTICATOR, false));
+  return jsonResponse(twoFactorProviderResponse(type, false));
 }
 
 // PUT /api/accounts/totp
@@ -943,8 +1224,8 @@ export async function handleSetTotpStatus(request: Request, env: Env, userId: st
     if (!verifiedUser) {
       return errorResponse('User verification failed.', 400);
     }
-    const verified = await verifyTotpToken(normalizedSecret, body.token);
-    if (!verified) {
+    const matchedCounter = await findMatchingTotpCounter(normalizedSecret, body.token);
+    if (matchedCounter == null || !await storage.consumeTotpLoginCounter(user.id, matchedCounter)) {
       return errorResponse('Invalid TOTP token', 400);
     }
     user.totpSecret = normalizedSecret;
@@ -1092,6 +1373,16 @@ export async function handleRecoverTwoFactor(request: Request, env: Env): Promis
   }
 
   user.totpSecret = null;
+  user.yubikeyKey1 = null;
+  user.yubikeyKey2 = null;
+  user.yubikeyKey3 = null;
+  user.yubikeyKey4 = null;
+  user.yubikeyKey5 = null;
+  user.yubikeyNfc = false;
+  const webAuthnCredentials = await storage.getAccountPasskeyCredentialsByUserId(user.id, 'twoFactor');
+  for (const credential of webAuthnCredentials) {
+    await storage.deleteAccountPasskeyCredential(user.id, credential.id, 'twoFactor');
+  }
   user.totpRecoveryCode = createRecoveryCode();
   user.securityStamp = generateUUID();
   user.updatedAt = new Date().toISOString();
@@ -1194,29 +1485,28 @@ async function apiKey(request: Request, env: Env, userId: string, rotate: boolea
   const valid = await auth.verifyPassword(currentHash, user.masterPasswordHash, user.email);
   if (!valid) return errorResponse('Invalid password', 400);
 
-  if (rotate || user.apiKey === null) {
-    // Upstream apikeys are 30-character random alphanumeric strings
-    user.apiKey = randomStringAlphanum(LIMITS.auth.clientSecretLength);
-    if (rotate) {
-      user.securityStamp = generateUUID();
-      await storage.deleteRefreshTokensByUserId(user.id);
-    }
-    user.updatedAt = new Date().toISOString();
-    await storage.saveUser(user);
-    AuthService.invalidateUserCache(user.id);
-    await writeAuditEvent(storage, {
-      actorUserId: user.id,
-      action: rotate ? 'account.api_key.rotate' : 'account.api_key.create',
-      category: 'security',
-      level: rotate ? 'security' : 'info',
-      targetType: 'user',
-      targetId: user.id,
-      metadata: auditRequestMetadata(request),
-    });
+  // Only the fresh secret is returned once; the database stores a hash.
+  const plainApiKey = randomStringAlphanum(LIMITS.auth.clientSecretLength);
+  user.apiKey = await hashApiKey(plainApiKey);
+  if (rotate) {
+    user.securityStamp = generateUUID();
+    await storage.deleteRefreshTokensByUserId(user.id);
   }
+  user.updatedAt = new Date().toISOString();
+  await storage.saveUser(user);
+  AuthService.invalidateUserCache(user.id);
+  await writeAuditEvent(storage, {
+    actorUserId: user.id,
+    action: rotate ? 'account.api_key.rotate' : 'account.api_key.create',
+    category: 'security',
+    level: rotate ? 'security' : 'info',
+    targetType: 'user',
+    targetId: user.id,
+    metadata: auditRequestMetadata(request),
+  });
 
   return jsonResponse({
-    apiKey: user.apiKey,
+    apiKey: plainApiKey,
     revisionDate: user.updatedAt,
     object: 'apiKey',
   });

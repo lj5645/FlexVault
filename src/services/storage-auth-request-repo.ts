@@ -68,6 +68,11 @@ export async function getAuthRequestById(db: D1Database, id: string): Promise<Au
   return row ? mapAuthRequestRow(row) : null;
 }
 
+export async function getAuthRequestByIdForUser(db: D1Database, id: string, userId: string): Promise<AuthRequestRecord | null> {
+  const row = await db.prepare(`${AUTH_REQUEST_SELECT} WHERE id = ? AND user_id = ? LIMIT 1`).bind(id, userId).first<any>();
+  return row ? mapAuthRequestRow(row) : null;
+}
+
 export async function listAuthRequestsByUserId(db: D1Database, userId: string): Promise<AuthRequestRecord[]> {
   const res = await db.prepare(`${AUTH_REQUEST_SELECT} WHERE user_id = ? ORDER BY creation_date DESC`).bind(userId).all<any>();
   return (res.results || []).map(mapAuthRequestRow);

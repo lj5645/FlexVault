@@ -78,7 +78,7 @@ async function handleHttpRequest(request: Request, env: SelfHostedEnv): Promise<
   const normalizedRequest = normalizeRequestUrl(request);
   const assetResponse = await maybeServeAsset(normalizedRequest, env);
   if (assetResponse) {
-    return applyCors(normalizedRequest, assetResponse);
+    return applyCors(normalizedRequest, assetResponse, env as any);
   }
 
   await ensureDatabaseInitialized(env);
@@ -98,11 +98,11 @@ async function handleHttpRequest(request: Request, env: SelfHostedEnv): Promise<
         headers: { 'Content-Type': 'application/json' },
       }
     );
-    return applyCors(normalizedRequest, resp);
+    return applyCors(normalizedRequest, resp, env as any);
   }
 
   const resp = await handleRequest(normalizedRequest, env as any);
-  return applyCors(normalizedRequest, resp);
+  return applyCors(normalizedRequest, resp, env as any);
 }
 
 function nodeRequestToWebRequest(req: http.IncomingMessage, body?: Buffer): Request {

@@ -172,6 +172,10 @@ input[type='file'].input::file-selector-button:hover {
   @apply shrink-0;
 }
 
+.btn-icon-spin {
+  animation: spin 0.9s linear infinite;
+}
+
 .btn.full {
   @apply my-2.5 h-12 w-full;
   font-size: var(--font-md);

@@ -215,13 +215,13 @@ function mapCipherEncrypted(cipher: Cipher): Record<string, unknown> {
   const login = cipher.login;
   out.login = login
     ? {
-        ...cloneValue(login),
+        ...(cloneWithoutDecodedFields(login) || {}),
         username: login.username ?? null,
         password: login.password ?? null,
         totp: login.totp ?? null,
         uris: Array.isArray(login.uris)
           ? login.uris.map((uri) => ({
-              ...cloneValue(uri),
+              ...(cloneWithoutDecodedFields(uri) || {}),
               uri: uri?.uri ?? null,
               uriChecksum: uri?.uriChecksum ?? null,
               match: (uri as { match?: unknown })?.match ?? null,
@@ -280,6 +280,7 @@ function mapCipherEncrypted(cipher: Cipher): Record<string, unknown> {
 
   out.sshKey = cipher.sshKey
     ? {
+        ...(cloneWithoutDecodedFields(cipher.sshKey) || {}),
         privateKey: cipher.sshKey.privateKey ?? null,
         publicKey: cipher.sshKey.publicKey ?? null,
         keyFingerprint: cipher.sshKey.keyFingerprint ?? cipher.sshKey.fingerprint ?? null,
@@ -287,6 +288,9 @@ function mapCipherEncrypted(cipher: Cipher): Record<string, unknown> {
         fingerprint: cipher.sshKey.keyFingerprint ?? cipher.sshKey.fingerprint ?? null,
       }
     : null;
+  out.bankAccount = cloneWithoutDecodedFields(cipher.bankAccount) ?? null;
+  out.driversLicense = cloneWithoutDecodedFields(cipher.driversLicense) ?? null;
+  out.passport = cloneWithoutDecodedFields(cipher.passport) ?? null;
 
   return out;
 }
@@ -331,8 +335,8 @@ async function mapCipherPlain(cipher: Cipher, userEnc: Uint8Array, userMac: Uint
     out.login = null;
   }
 
-  out.card = cipher.card ? await deepDecryptUnknown(cipher.card, keyParts.enc, keyParts.mac) : null;
-  out.identity = cipher.identity ? await deepDecryptUnknown(cipher.identity, keyParts.enc, keyParts.mac) : null;
+  out.card = cipher.card ? await deepDecryptUnknown(cloneWithoutDecodedFields(cipher.card), keyParts.enc, keyParts.mac) : null;
+  out.identity = cipher.identity ? await deepDecryptUnknown(cloneWithoutDecodedFields(cipher.identity), keyParts.enc, keyParts.mac) : null;
   if (cipher.sshKey) {
     const fingerprint = await decryptMaybe(
       cipher.sshKey.keyFingerprint ?? cipher.sshKey.fingerprint ?? null,
@@ -340,6 +344,7 @@ async function mapCipherPlain(cipher: Cipher, userEnc: Uint8Array, userMac: Uint
       keyParts.mac
     );
     out.sshKey = {
+      ...((await deepDecryptUnknown(cloneWithoutDecodedFields(cipher.sshKey), keyParts.enc, keyParts.mac)) as Record<string, unknown>),
       privateKey: await decryptMaybe(cipher.sshKey.privateKey ?? null, keyParts.enc, keyParts.mac),
       publicKey: await decryptMaybe(cipher.sshKey.publicKey ?? null, keyParts.enc, keyParts.mac),
       keyFingerprint: fingerprint,
@@ -349,6 +354,15 @@ async function mapCipherPlain(cipher: Cipher, userEnc: Uint8Array, userMac: Uint
   } else {
     out.sshKey = null;
   }
+  out.bankAccount = cipher.bankAccount
+    ? await deepDecryptUnknown(cloneWithoutDecodedFields(cipher.bankAccount), keyParts.enc, keyParts.mac)
+    : null;
+  out.driversLicense = cipher.driversLicense
+    ? await deepDecryptUnknown(cloneWithoutDecodedFields(cipher.driversLicense), keyParts.enc, keyParts.mac)
+    : null;
+  out.passport = cipher.passport
+    ? await deepDecryptUnknown(cloneWithoutDecodedFields(cipher.passport), keyParts.enc, keyParts.mac)
+    : null;
   out.secureNote = cipher.secureNote
     ? {
         type: normalizeNumber((cipher.secureNote as { type?: unknown }).type, 0),
@@ -431,6 +445,9 @@ function sourceTypeLabel(type: number): string {
   if (type === 3) return 'card';
   if (type === 4) return 'identity';
   if (type === 5) return 'sshKey';
+  if (type === 6) return 'bankAccount';
+  if (type === 7) return 'driversLicense';
+  if (type === 8) return 'passport';
   if (type === 2) return 'note';
   return `type ${type}`;
 }
@@ -449,6 +466,56 @@ function appendRecordFieldLines(lines: string[], prefix: string, value: unknown)
   }
 }
 
+function cloneWithoutDecodedFields(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) return null;
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (/^dec[A-Z]/.test(key)) continue;
+    out[key] = cloneValue(item);
+  }
+  return out;
+}
+
+const BITWARDEN_CSV_OBJECT_FIELDS: Record<string, readonly string[]> = {
+  card: ['cardholderName', 'brand', 'number', 'expMonth', 'expYear', 'code'],
+  identity: [
+    'title',
+    'firstName',
+    'middleName',
+    'lastName',
+    'username',
+    'company',
+    'ssn',
+    'passportNumber',
+    'licenseNumber',
+    'email',
+    'phone',
+    'address1',
+    'address2',
+    'address3',
+    'city',
+    'state',
+    'postalCode',
+    'country',
+  ],
+  sshKey: ['privateKey', 'publicKey', 'keyFingerprint', 'fingerprint'],
+  bankAccount: ['bankName', 'nameOnAccount', 'accountType', 'accountNumber', 'routingNumber', 'branchNumber', 'pin', 'swiftCode', 'iban', 'bankContactPhone'],
+  driversLicense: ['firstName', 'middleName', 'lastName', 'dateOfBirth', 'licenseNumber', 'issuingCountry', 'issuingState', 'issueDate', 'expirationDate', 'issuingAuthority', 'licenseClass'],
+  passport: ['surname', 'givenName', 'dateOfBirth', 'sex', 'birthPlace', 'nationality', 'issuingCountry', 'passportNumber', 'passportType', 'nationalIdentificationNumber', 'issuingAuthority', 'issueDate', 'expirationDate'],
+};
+
+function appendKnownRecordFieldLines(lines: string[], prefix: string, value: unknown): void {
+  if (!isRecord(value)) return;
+  const keys = BITWARDEN_CSV_OBJECT_FIELDS[prefix];
+  if (!keys) {
+    appendRecordFieldLines(lines, prefix, value);
+    return;
+  }
+  for (const key of keys) {
+    appendFieldLine(lines, `${prefix}.${key}`, value[key]);
+  }
+}
+
 function buildBitwardenCsvFields(item: Record<string, unknown>, type: number): string {
   const lines: string[] = [];
   const fields = Array.isArray(item.fields) ? item.fields : [];
@@ -457,8 +524,9 @@ function buildBitwardenCsvFields(item: Record<string, unknown>, type: number): s
     appendFieldLine(lines, field.name, field.value);
   }
   if (type !== 1 && type !== 2) {
-    appendFieldLine(lines, 'nodewardenType', sourceTypeLabel(type));
-    appendRecordFieldLines(lines, sourceTypeLabel(type), item[sourceTypeLabel(type)]);
+    const sourceLabel = sourceTypeLabel(type);
+    appendFieldLine(lines, 'nodewardenType', sourceLabel);
+    appendKnownRecordFieldLines(lines, sourceLabel, item[sourceLabel]);
   }
   return lines.join('\n');
 }

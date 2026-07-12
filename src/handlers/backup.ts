@@ -2,8 +2,10 @@ import type { Env, User } from '../types';
 import { errorResponse, jsonResponse } from '../utils/response';
 import {
   type BackupArchiveBundle,
+  MAX_BACKUP_ARCHIVE_BYTES,
   buildBackupArchive,
   inspectBackupArchiveFileNameChecksum,
+  isSafeBackupAttachmentBlobName,
   parseBackupArchive,
   verifyBackupArchiveFileNameChecksum,
 } from '../services/backup-archive';
@@ -18,9 +20,11 @@ import {
   loadBackupSettings,
   normalizeBackupSettingsInput,
   normalizeImportedBackupSettings,
+  redactBackupSettingsSecrets,
   repairBackupSettings,
   requireBackupDestination,
   saveBackupSettings,
+  updateBackupDestinationRuntime,
 } from '../services/backup-config';
 import {
   type BackupImportExecutionResult,
@@ -44,11 +48,20 @@ import { AuthService } from '../services/auth';
 import { auditRequestMetadata, writeAuditEvent } from '../services/audit-events';
 import { getBlobObject } from '../services/blob-store';
 import { notifyUserBackupProgress, notifyUserBackupRestoreProgress } from '../durable/notifications-hub';
+import { getMultipartRequestMaxBytes } from '../utils/direct-upload';
 import { verifyPasskeyUserVerificationToken } from '../utils/user-verification-token';
 import { unzipSync } from 'fflate';
 
 function isAdmin(user: User): boolean {
   return user.role === 'admin' && user.status === 'active';
+}
+
+function parseRequestContentLength(request: Request): number | null {
+  const raw = request.headers.get('content-length');
+  if (!raw) return null;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) return null;
+  return Math.floor(value);
 }
 
 async function requireBackupUserVerification(actorUser: User, masterPasswordHash: string, env: Env): Promise<Response | null> {
@@ -128,11 +141,18 @@ function ensureBackupBlobName(value: string): string {
   if (!normalized) {
     throw new Error('Backup attachment blob is required');
   }
-  const parts = normalized.split('/').filter(Boolean);
-  if (!parts.length || parts.some((part) => part === '.' || part === '..')) {
+  if (!isSafeBackupAttachmentBlobName(normalized)) {
     throw new Error('Backup attachment blob is invalid');
   }
-  return parts.join('/');
+  return normalized;
+}
+
+function contentDispositionBackup(fileName: string | null | undefined): string {
+  const fallback = 'nodewarden_backup.zip';
+  const value = String(fileName || fallback)
+    .replace(/[\\/\r\n"]/g, '_')
+    .trim() || fallback;
+  return `attachment; filename="${value}"`;
 }
 
 const REMOTE_ATTACHMENT_INDEX_PATH = 'attachments/.nodewarden-attachment-index.v1.json';
@@ -260,6 +280,30 @@ async function uploadRemoteAttachmentChunk(
   }
 }
 
+async function verifyUploadedBackupArchive(
+  session: RemoteBackupTransferSession,
+  archive: BackupArchiveBundle
+): Promise<'metadata' | 'download'> {
+  try {
+    const stat = await session.stat(archive.fileName);
+    if (stat?.size === archive.bytes.byteLength) {
+      return 'metadata';
+    }
+  } catch {
+    // Fall through to a full read-back verification when lightweight metadata is unavailable.
+  }
+
+  const remoteFile = await session.download(archive.fileName);
+  const checksumOk = await verifyBackupArchiveFileNameChecksum(remoteFile.bytes, archive.fileName);
+  if (!checksumOk) {
+    throw new Error('Remote backup ZIP checksum verification failed');
+  }
+  if (remoteFile.bytes.byteLength !== archive.bytes.byteLength) {
+    throw new Error('Remote backup ZIP size verification failed');
+  }
+  return 'download';
+}
+
 export async function executeConfiguredBackup(
   env: Env,
   storage: StorageService,
@@ -287,12 +331,14 @@ export async function executeConfiguredBackup(
   const destination = requireBackupDestination(currentSettings, destinationId);
 
   const now = new Date();
-  destination.runtime.lastAttemptAt = now.toISOString();
-  destination.runtime.lastAttemptLocalDate = getBackupLocalDateKey(now, destination.schedule.timezone);
-  destination.runtime.lastErrorAt = null;
-  destination.runtime.lastErrorMessage = null;
   await touchLease();
-  await saveBackupSettings(storage, env, currentSettings);
+  destination.runtime = await updateBackupDestinationRuntime(storage, destination.id, (runtime) => ({
+    ...runtime,
+    lastAttemptAt: now.toISOString(),
+    lastAttemptLocalDate: getBackupLocalDateKey(now, destination.schedule.timezone),
+    lastErrorAt: null,
+    lastErrorMessage: null,
+  }));
 
   try {
     await touchLease();
@@ -354,6 +400,7 @@ export async function executeConfiguredBackup(
       }
     }
     let upload: Awaited<ReturnType<typeof uploadBackupArchive>> | null = null;
+    let uploadVerificationMethod: 'metadata' | 'download' | null = null;
     for (let attempt = 1; attempt <= maxArchiveUploadAttempts; attempt++) {
       await touchLease();
       await progress?.({
@@ -373,14 +420,7 @@ export async function executeConfiguredBackup(
           stageTitle: 'txt_backup_remote_run_progress_verify_title',
           stageDetail: 'txt_backup_remote_run_progress_verify_detail',
         });
-        const remoteFile = await remoteSession.download(archive.fileName);
-        const checksumOk = await verifyBackupArchiveFileNameChecksum(remoteFile.bytes, archive.fileName);
-        if (!checksumOk) {
-          throw new Error('Remote backup ZIP checksum verification failed');
-        }
-        if (remoteFile.bytes.byteLength !== archive.bytes.byteLength) {
-          throw new Error('Remote backup ZIP size verification failed');
-        }
+        uploadVerificationMethod = await verifyUploadedBackupArchive(remoteSession, archive);
         break;
       } catch (error) {
         await remoteSession.deleteFile(archive.fileName).catch(() => undefined);
@@ -409,14 +449,16 @@ export async function executeConfiguredBackup(
       pruneErrorMessage = error instanceof Error ? error.message : 'Old backup cleanup failed';
     }
 
-    destination.runtime.lastSuccessAt = new Date().toISOString();
-    destination.runtime.lastErrorAt = null;
-    destination.runtime.lastErrorMessage = null;
-    destination.runtime.lastUploadedFileName = archive.fileName;
-    destination.runtime.lastUploadedSizeBytes = archive.bytes.byteLength;
-    destination.runtime.lastUploadedDestination = upload.remotePath;
     await touchLease();
-    await saveBackupSettings(storage, env, currentSettings);
+    destination.runtime = await updateBackupDestinationRuntime(storage, destination.id, (runtime) => ({
+      ...runtime,
+      lastSuccessAt: new Date().toISOString(),
+      lastErrorAt: null,
+      lastErrorMessage: null,
+      lastUploadedFileName: archive.fileName,
+      lastUploadedSizeBytes: archive.bytes.byteLength,
+      lastUploadedDestination: upload.remotePath,
+    }));
 
     await touchLease();
     await writeAuditLog(storage, actorUserId, `admin.backup.remote.${trigger}`, 'backup', null, {
@@ -426,6 +468,7 @@ export async function executeConfiguredBackup(
       fileName: archive.fileName,
       fileBytes: archive.bytes.byteLength,
       uploadVerificationAttempts: maxArchiveUploadAttempts,
+      uploadVerificationMethod,
       prunedFileCount,
       pruneError: pruneErrorMessage,
       ...(auditMetadata || {}),
@@ -448,15 +491,18 @@ export async function executeConfiguredBackup(
       provider: upload.provider,
     };
   } catch (error) {
-    destination.runtime.lastErrorAt = new Date().toISOString();
-    destination.runtime.lastErrorMessage = error instanceof Error ? error.message : 'Backup upload failed';
+    const errorMessage = error instanceof Error ? error.message : 'Backup upload failed';
     await touchLease();
-    await saveBackupSettings(storage, env, currentSettings);
+    destination.runtime = await updateBackupDestinationRuntime(storage, destination.id, (runtime) => ({
+      ...runtime,
+      lastErrorAt: new Date().toISOString(),
+      lastErrorMessage: errorMessage,
+    }));
 
     await touchLease();
     await writeAuditLog(storage, actorUserId, `admin.backup.remote.${trigger}.failed`, 'backup', null, {
       ...getBackupDestinationSummary(destination),
-      error: destination.runtime.lastErrorMessage,
+      error: errorMessage,
       ...(auditMetadata || {}),
     });
     await progress?.({
@@ -467,7 +513,7 @@ export async function executeConfiguredBackup(
       stageDetail: 'txt_backup_remote_run_progress_failed_detail',
       done: true,
       ok: false,
-      error: destination.runtime.lastErrorMessage,
+      error: errorMessage,
     });
     throw error;
   }
@@ -627,6 +673,7 @@ function collectExternalRemoteAttachmentBlobNames(archiveBytes: Uint8Array): str
     if (parsed.files[inlinePath]) continue;
     const ref = refs.get(`${cipherId}/${attachmentId}`);
     const blobName = String(ref?.blobName || '').trim();
+    if (!isSafeBackupAttachmentBlobName(blobName)) continue;
     if (blobName && !seen.has(blobName)) {
       seen.add(blobName);
       names.push(blobName);
@@ -639,6 +686,7 @@ function collectExternalRemoteAttachmentBlobNames(archiveBytes: Uint8Array): str
 function toImportStatusCode(message: string): number {
   const lower = message.toLowerCase();
   if (lower.includes('checksum')) return 400;
+  if (lower.includes('invalid remote backup path') || lower.includes('please select a backup zip file')) return 409;
   if (lower.includes('invalid backup') || lower.includes('invalid json')) return 400;
   if (lower.includes('fresh instance')) return 409;
   if (lower.includes('not configured') || lower.includes('kv')) return 409;
@@ -655,12 +703,18 @@ export async function importAndAuditRemoteBackupFile(
   replaceExisting: boolean,
   checksumMismatchAccepted: boolean,
   auditMetadata: Record<string, unknown> | null = null,
-  targetDeviceIdentifier: string | null = null
+  targetDeviceIdentifier: string | null = null,
+  keepAlive?: (() => Promise<void>) | null
 ): Promise<BackupImportExecutionResult> {
+  const touchLease = async () => {
+    await keepAlive?.();
+  };
   const restoreFileName = remoteFile.fileName || remotePath.split('/').pop() || remotePath;
+  await touchLease();
   const externalAttachmentBlobNames = collectExternalRemoteAttachmentBlobNames(remoteFile.bytes);
   const externalAttachmentCache = new Map<string, Uint8Array | null>();
   const progress: BackupRestoreProgressReporter = async (event) => {
+    await touchLease();
     await notifyUserBackupRestoreProgress(
       env,
       actorUserId,
@@ -678,6 +732,7 @@ export async function importAndAuditRemoteBackupFile(
     replaceExisting,
     {
       loadAttachment: async (blobName) => {
+        await touchLease();
         const normalized = String(blobName || '').trim();
         if (!normalized) return null;
         if (externalAttachmentCache.has(normalized)) {
@@ -700,6 +755,7 @@ export async function importAndAuditRemoteBackupFile(
         } catch {
           externalAttachmentCache.set(normalized, await downloadRemoteAttachmentViaDurableObject(env, destination, normalized).catch(() => null));
         }
+        await touchLease();
         return externalAttachmentCache.get(normalized) || null;
       },
     },
@@ -814,7 +870,7 @@ export async function handleGetAdminBackupSettings(request: Request, env: Env, a
   const storage = new StorageService(env.DB);
   try {
     const settings = await loadBackupSettings(storage, env, 'UTC');
-    return jsonResponse(settings);
+    return jsonResponse(redactBackupSettingsSecrets(settings));
   } catch (error) {
     return errorResponse(error instanceof Error ? error.message : 'Backup settings could not be loaded', 409);
   }
@@ -853,7 +909,7 @@ export async function handleUpdateAdminBackupSettings(request: Request, env: Env
     destinationCount: next.destinations.length,
     scheduledDestinationCount: next.destinations.filter((destination) => destination.schedule.enabled).length,
   }, request);
-  return jsonResponse(next);
+  return jsonResponse(redactBackupSettingsSecrets(next));
 }
 
 export async function handleGetAdminBackupSettingsRepairState(request: Request, env: Env, actorUser: User): Promise<Response> {
@@ -906,7 +962,7 @@ export async function handleRepairAdminBackupSettings(request: Request, env: Env
     destinationCount: next.destinations.length,
     scheduledDestinationCount: next.destinations.filter((destination) => destination.schedule.enabled).length,
   }, request);
-  return jsonResponse(next);
+  return jsonResponse(redactBackupSettingsSecrets(next));
 }
 
 export async function handleRunAdminConfiguredBackup(request: Request, env: Env, actorUser: User): Promise<Response> {
@@ -943,7 +999,7 @@ export async function handleRunAdminConfiguredBackup(request: Request, env: Env,
         provider: outcome.result.provider,
         remotePath: outcome.result.remotePath,
       },
-      settings: outcome.settings,
+      settings: redactBackupSettingsSecrets(outcome.settings),
     });
   } catch (error) {
     return errorResponse(error instanceof Error ? error.message : 'Backup run failed', 500);
@@ -993,8 +1049,9 @@ export async function handleDownloadAdminRemoteBackup(request: Request, env: Env
       status: 200,
       headers: {
         'Content-Type': remoteFile.contentType || 'application/zip',
-        'Content-Disposition': `attachment; filename="${remoteFile.fileName}"`,
+        'Content-Disposition': contentDispositionBackup(remoteFile.fileName),
         'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
       },
     });
   } catch (error) {
@@ -1005,12 +1062,21 @@ export async function handleDownloadAdminRemoteBackup(request: Request, env: Env
 export async function handleInspectAdminRemoteBackup(request: Request, env: Env, actorUser: User): Promise<Response> {
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
+  let body: { destinationId?: string; path?: string; masterPasswordHash?: string };
+  try {
+    body = await request.json<{ destinationId?: string; path?: string; masterPasswordHash?: string }>();
+  } catch {
+    return errorResponse('Remote backup integrity payload is invalid', 400);
+  }
+
+  const verificationError = await requireBackupUserVerification(actorUser, String(body.masterPasswordHash || ''), env);
+  if (verificationError) return verificationError;
+
   const storage = new StorageService(env.DB);
   try {
     const settings = await loadBackupSettings(storage, env, 'UTC');
-    const url = new URL(request.url);
-    const path = ensureRemoteRestoreCandidate(url.searchParams.get('path') || '');
-    const destination = requireBackupDestination(settings, url.searchParams.get('destinationId') || null);
+    const path = ensureRemoteRestoreCandidate(String(body.path || ''));
+    const destination = requireBackupDestination(settings, body.destinationId || null);
     const remoteFile = await downloadRemoteBackupFile(destination, path);
     const integrity = await inspectBackupArchiveFileNameChecksum(remoteFile.bytes, remoteFile.fileName || path);
     return jsonResponse({
@@ -1028,12 +1094,21 @@ export async function handleInspectAdminRemoteBackup(request: Request, env: Env,
 export async function handleDeleteAdminRemoteBackup(request: Request, env: Env, actorUser: User): Promise<Response> {
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
+  let body: { destinationId?: string; path?: string; masterPasswordHash?: string };
+  try {
+    body = await request.json<{ destinationId?: string; path?: string; masterPasswordHash?: string }>();
+  } catch {
+    return errorResponse('Remote backup delete payload is invalid', 400);
+  }
+
+  const verificationError = await requireBackupUserVerification(actorUser, String(body.masterPasswordHash || ''), env);
+  if (verificationError) return verificationError;
+
   const storage = new StorageService(env.DB);
   try {
     const settings = await loadBackupSettings(storage, env, 'UTC');
-    const url = new URL(request.url);
-    const path = ensureRemoteRestoreCandidate(url.searchParams.get('path') || '');
-    const destination = requireBackupDestination(settings, url.searchParams.get('destinationId') || null);
+    const path = ensureRemoteRestoreCandidate(String(body.path || ''));
+    const destination = requireBackupDestination(settings, body.destinationId || null);
     await deleteRemoteBackupFile(destination, path);
     await writeAuditLog(storage, actorUser.id, 'admin.backup.remote.delete', 'backup', null, {
       ...getBackupDestinationSummary(destination),
@@ -1161,8 +1236,9 @@ export async function handleAdminExportBackup(request: Request, env: Env, actorU
     status: 200,
     headers: {
       'Content-Type': 'application/zip',
-      'Content-Disposition': `attachment; filename="${archive.fileName}"`,
+      'Content-Disposition': contentDispositionBackup(archive.fileName),
       'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
     },
   });
 }
@@ -1172,7 +1248,28 @@ export async function handleDownloadAdminBackupAttachment(request: Request, env:
 
   try {
     const url = new URL(request.url);
-    const blobName = ensureBackupBlobName(url.searchParams.get('blobName') || '');
+    let input: { blobName?: unknown; masterPasswordHash?: unknown } = {};
+    if (request.method === 'POST') {
+      try {
+        input = await request.json<{ blobName?: unknown; masterPasswordHash?: unknown }>();
+      } catch {
+        return errorResponse('Backup attachment download payload is invalid', 400);
+      }
+    } else {
+      input = {
+        blobName: url.searchParams.get('blobName') || '',
+        masterPasswordHash: url.searchParams.get('masterPasswordHash') || '',
+      };
+    }
+
+    const verificationError = await requireBackupUserVerification(
+      actorUser,
+      String(input.masterPasswordHash || ''),
+      env
+    );
+    if (verificationError) return verificationError;
+
+    const blobName = ensureBackupBlobName(String(input.blobName || ''));
     const object = await getBlobObject(env, blobName);
     if (!object) {
       return errorResponse('Backup attachment blob not found', 404);
@@ -1193,6 +1290,15 @@ export async function handleDownloadAdminBackupAttachment(request: Request, env:
 export async function handleAdminImportBackup(request: Request, env: Env, actorUser: User): Promise<Response> {
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
+  const contentType = request.headers.get('Content-Type') || '';
+  if (!contentType.includes('multipart/form-data')) {
+    return errorResponse('Content-Type must be multipart/form-data', 400);
+  }
+  const declaredSize = parseRequestContentLength(request);
+  if (declaredSize !== null && declaredSize > getMultipartRequestMaxBytes(MAX_BACKUP_ARCHIVE_BYTES)) {
+    return errorResponse(`Backup file too large. Maximum size is ${Math.floor(MAX_BACKUP_ARCHIVE_BYTES / (1024 * 1024))}MB`, 413);
+  }
+
   let formData: FormData;
   try {
     formData = await request.formData();
@@ -1203,6 +1309,9 @@ export async function handleAdminImportBackup(request: Request, env: Env, actorU
   const file = formData.get('file');
   if (!file || typeof file !== 'object' || !('arrayBuffer' in file)) {
     return errorResponse('Backup file is required', 400);
+  }
+  if ('size' in file && typeof (file as File).size === 'number' && (file as File).size > MAX_BACKUP_ARCHIVE_BYTES) {
+    return errorResponse(`Backup file too large. Maximum size is ${Math.floor(MAX_BACKUP_ARCHIVE_BYTES / (1024 * 1024))}MB`, 413);
   }
 
   const verificationError = await requireBackupUserVerification(actorUser, String(formData.get('masterPasswordHash') || ''), env);

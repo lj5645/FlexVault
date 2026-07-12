@@ -88,12 +88,13 @@ export async function handleSync(request: Request, env: Env, userId: string): Pr
     .map(buildWebAuthnPrfOption)
     .filter((option): option is NonNullable<typeof option> => !!option);
   const userDecryptionOptions = buildUserDecryptionOptions(user, webAuthnPrfOptions[0] || null);
+  const validFolderIds = new Set(folders.map((folder) => folder.id));
 
   const profile: ProfileResponse = buildProfileResponse(user, env);
 
   const cipherResponses: CipherResponse[] = [];
   for (const cipher of ciphers) {
-    const response = cipherToResponse(cipher, attachmentsByCipher.get(cipher.id) || [], { preserveRepairableUris });
+    const response = cipherToResponse(cipher, attachmentsByCipher.get(cipher.id) || [], { preserveRepairableUris, validFolderIds });
     if (isCipherResponseSyncCompatible(response)) {
       cipherResponses.push(response);
     }

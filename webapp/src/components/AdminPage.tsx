@@ -13,10 +13,11 @@ interface AdminPageProps {
   error: string;
   onRefresh: () => void;
   onCreateInvite: (hours: number) => Promise<void>;
+  onDeleteInvalidInvites: () => Promise<void>;
   onDeleteAllInvites: () => Promise<void>;
   onToggleUserStatus: (userId: string, currentStatus: 'active' | 'banned') => Promise<void>;
   onDeleteUser: (userId: string) => Promise<void>;
-  onRevokeInvite: (code: string) => Promise<void>;
+  onDeleteInvite: (code: string) => Promise<void>;
 }
 
 export default function AdminPage(props: AdminPageProps) {
@@ -134,7 +135,10 @@ export default function AdminPage(props: AdminPageProps) {
           <h3>{t('txt_invites')}</h3>
           <div className="actions admin-invites-head-actions">
             <button type="button" className="btn btn-secondary small" disabled={props.loading} onClick={props.onRefresh}>
-              <RefreshCw size={14} className="btn-icon" /> {t('txt_sync')}
+              <RefreshCw size={14} className="btn-icon" /> {t('txt_refresh')}
+            </button>
+            <button type="button" className="btn btn-danger small" onClick={() => void props.onDeleteInvalidInvites()}>
+              <Trash2 size={14} className="btn-icon" /> {t('txt_delete_invalid')}
             </button>
             <button type="button" className="btn btn-danger small" onClick={() => void props.onDeleteAllInvites()}>
               <Trash2 size={14} className="btn-icon" /> {t('txt_delete_all')}
@@ -184,11 +188,9 @@ export default function AdminPage(props: AdminPageProps) {
                     >
                       <Clipboard size={14} className="btn-icon" /> {t('txt_copy_link')}
                     </button>
-                    {invite.status === 'active' && (
-                      <button type="button" className="btn btn-danger" onClick={() => void props.onRevokeInvite(invite.code)}>
-                        <Trash2 size={14} className="btn-icon" /> {t('txt_revoke')}
-                      </button>
-                    )}
+                    <button type="button" className="btn btn-danger" onClick={() => void props.onDeleteInvite(invite.code)}>
+                      <Trash2 size={14} className="btn-icon" /> {t('txt_delete')}
+                    </button>
                   </div>
                 </td>
               </tr>

@@ -1,17 +1,11 @@
 .app-page {
-  @apply relative min-h-full bg-transparent p-5;
+  @apply relative min-h-full bg-transparent;
 }
 
 .app-shell {
-  @apply relative mx-auto flex max-w-[1600px] flex-col overflow-hidden border bg-panel-soft;
-  height: calc(100vh - 40px);
-  border-color: var(--line);
-  @apply rounded-3xl;
-  box-shadow:
-    0 20px 60px rgba(15, 23, 42, 0.12),
-    0 8px 24px rgba(15, 23, 42, 0.08),
-    0 0 0 1px rgba(15, 23, 42, 0.04);
-  transition: box-shadow var(--dur-medium) var(--ease-smooth);
+  @apply relative flex flex-col;
+  height: 100vh;
+  background: var(--bg-accent);
 }
 
 .topbar {

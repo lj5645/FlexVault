@@ -68,6 +68,10 @@
   @apply my-1.5 text-3xl;
 }
 
+.dialog-title-stack {
+  @apply flex flex-col items-center gap-1;
+}
+
 .dialog-message {
   @apply mb-2.5;
   color: #475467;
@@ -91,12 +95,31 @@
 }
 
 .dialog-extra {
-  @apply mt-2;
+  @apply mt-2 grid gap-2;
 }
 
 .dialog-divider {
   @apply my-2 mb-2.5 h-px;
   background: var(--line);
+}
+
+.two-factor-method-switcher {
+  @apply grid gap-2;
+}
+
+.two-factor-method-list {
+  @apply grid gap-2 rounded-lg border p-2;
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--panel) 92%, var(--surface));
+}
+
+.two-factor-method-label {
+  @apply px-1 text-left text-sm font-extrabold;
+  color: var(--muted);
+}
+
+.two-factor-method-option {
+  @apply min-h-11 justify-start text-base;
 }
 
 .import-summary-dialog {

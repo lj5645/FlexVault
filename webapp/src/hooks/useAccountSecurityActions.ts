@@ -1,21 +1,32 @@
 import { useMemo } from 'preact/hooks';
 import {
   changeMasterPassword,
+  bootstrapYubiKeyOtpApiCredentials,
   deleteAllAuthorizedDevices,
   deleteAuthorizedDevice,
+  deleteAuthorizedDevices,
   deriveLoginHash,
   deleteAccountPasskey as deleteAccountPasskeyApi,
+  deleteTwoFactorPasskey as deleteTwoFactorPasskeyApi,
   enableAccountPasskeyDirectUnlock as enableAccountPasskeyDirectUnlockApi,
+  disableTwoFactorPasskeys as disableTwoFactorPasskeysApi,
+  disableYubiKeyOtp,
   getCurrentDeviceIdentifier,
   getApiKey,
   getAccountPasskeyAttestationOptions,
   getAccountPasskeyUpdateAssertionOptions,
   getTotpRecoveryCode,
+  getTwoFactorPasskeyChallenge,
+  getTwoFactorPasskeySettings as getTwoFactorPasskeySettingsApi,
+  getYubiKeyOtpSettings,
   listAccountPasskeys,
   rotateApiKey,
   revokeAuthorizedDeviceTrust,
   revokeAllAuthorizedDeviceTrust,
   saveAccountPasskey,
+  saveTwoFactorPasskey,
+  saveYubiKeyOtpApiCredentials,
+  saveYubiKeyOtpSettings,
   setTotp,
   trustAuthorizedDevicePermanently,
   updateAuthorizedDeviceName,
@@ -27,11 +38,12 @@ import {
   buildAccountPasskeyPrfKeySet,
   buildAccountPasskeyPrfKeySetFromPrfKey,
   createAccountPasskeyCredential,
+  createTwoFactorPasskeyCredential,
 } from '@/lib/account-passkeys';
 import { t } from '@/lib/i18n';
 import type { AppConfirmState } from '@/components/AppGlobalOverlays';
 import type { AuthedFetch } from '@/lib/api/shared';
-import type { AccountPasskeyCredential, AuthorizedDevice, Profile, SessionState } from '@/lib/types';
+import type { AccountPasskeyCredential, AuthorizedDevice, Profile, SessionState, TwoFactorPasskeySettings, YubiKeyOtpSettings } from '@/lib/types';
 
 type Notify = (type: 'success' | 'error' | 'warning', text: string) => void;
 
@@ -46,7 +58,7 @@ interface UseAccountSecurityActionsOptions {
   onNotify: Notify;
   onProfileUpdated: (profile: Profile) => void;
   onSetConfirm: (next: AppConfirmState | null) => void;
-  refetchTotpStatus: () => Promise<unknown>;
+  refetchTwoFactorStatus: () => Promise<unknown>;
   refetchAuthorizedDevices: () => Promise<unknown>;
 }
 
@@ -62,7 +74,7 @@ export default function useAccountSecurityActions(options: UseAccountSecurityAct
     onNotify,
     onProfileUpdated,
     onSetConfirm,
-    refetchTotpStatus,
+    refetchTwoFactorStatus,
     refetchAuthorizedDevices,
   } = options;
 
@@ -186,11 +198,116 @@ export default function useAccountSecurityActions(options: UseAccountSecurityAct
           const derived = await deriveLoginHash(profile.email, disableTotpPassword, defaultKdfIterations);
           await setTotp(authedFetch, { enabled: false, masterPasswordHash: derived.hash });
           clearDisableTotpDialog();
-          await refetchTotpStatus();
+          await refetchTwoFactorStatus();
           onNotify('success', t('txt_totp_disabled'));
         } catch (error) {
           onNotify('error', error instanceof Error ? error.message : t('txt_disable_totp_failed'));
         }
+      },
+
+      async getYubiKeySettings(masterPassword: string): Promise<YubiKeyOtpSettings> {
+        if (!profile) throw new Error(t('txt_profile_unavailable'));
+        const normalized = String(masterPassword || '');
+        if (!normalized) throw new Error(t('txt_master_password_is_required'));
+        const derived = await deriveLoginHash(profile.email, normalized, defaultKdfIterations);
+        return getYubiKeyOtpSettings(authedFetch, derived.hash);
+      },
+
+      async saveYubiKeySettings(keys: string[], nfc: boolean, masterPassword: string): Promise<YubiKeyOtpSettings> {
+        if (!profile) throw new Error(t('txt_profile_unavailable'));
+        const normalized = String(masterPassword || '');
+        if (!normalized) throw new Error(t('txt_master_password_is_required'));
+        const derived = await deriveLoginHash(profile.email, normalized, defaultKdfIterations);
+        const settings = await saveYubiKeyOtpSettings(authedFetch, { keys, nfc, masterPasswordHash: derived.hash });
+        await refetchTwoFactorStatus();
+        onNotify('success', t('txt_yubikeys_updated'));
+        return settings;
+      },
+
+      async saveYubiKeyApiCredentials(clientId: string, secretKey: string, masterPassword: string): Promise<YubiKeyOtpSettings> {
+        if (!profile) throw new Error(t('txt_profile_unavailable'));
+        const normalized = String(masterPassword || '');
+        if (!normalized) throw new Error(t('txt_master_password_is_required'));
+        const derived = await deriveLoginHash(profile.email, normalized, defaultKdfIterations);
+        const settings = await saveYubiKeyOtpApiCredentials(authedFetch, {
+          masterPasswordHash: derived.hash,
+          yubicoClientId: clientId,
+          yubicoSecretKey: secretKey,
+        });
+        await refetchTwoFactorStatus();
+        onNotify('success', t('txt_yubikey_config_updated'));
+        return settings;
+      },
+
+      async bootstrapYubiKeyApiCredentials(otp: string, masterPassword: string): Promise<YubiKeyOtpSettings> {
+        if (!profile) throw new Error(t('txt_profile_unavailable'));
+        const normalized = String(masterPassword || '');
+        if (!normalized) throw new Error(t('txt_master_password_is_required'));
+        const derived = await deriveLoginHash(profile.email, normalized, defaultKdfIterations);
+        const settings = await bootstrapYubiKeyOtpApiCredentials(authedFetch, {
+          masterPasswordHash: derived.hash,
+          otp,
+        });
+        await refetchTwoFactorStatus();
+        onNotify('success', t('txt_yubikey_config_updated'));
+        return settings;
+      },
+
+      async disableYubiKey(masterPassword: string): Promise<void> {
+        if (!profile) throw new Error(t('txt_profile_unavailable'));
+        const normalized = String(masterPassword || '');
+        if (!normalized) throw new Error(t('txt_master_password_is_required'));
+        const derived = await deriveLoginHash(profile.email, normalized, defaultKdfIterations);
+        await disableYubiKeyOtp(authedFetch, derived.hash);
+        await refetchTwoFactorStatus();
+        onNotify('success', t('txt_yubikey_disabled'));
+      },
+
+      async getTwoFactorPasskeySettings(masterPassword: string): Promise<TwoFactorPasskeySettings> {
+        if (!profile) throw new Error(t('txt_profile_unavailable'));
+        const normalized = String(masterPassword || '');
+        if (!normalized) throw new Error(t('txt_master_password_is_required'));
+        const derived = await deriveLoginHash(profile.email, normalized, defaultKdfIterations);
+        return getTwoFactorPasskeySettingsApi(authedFetch, derived.hash);
+      },
+
+      async createTwoFactorPasskey(name: string, masterPassword: string): Promise<TwoFactorPasskeySettings> {
+        if (!profile) throw new Error(t('txt_profile_unavailable'));
+        const normalized = String(masterPassword || '');
+        if (!normalized) throw new Error(t('txt_master_password_is_required'));
+        const normalizedName = String(name || '').trim() || t('txt_passkey');
+        const derived = await deriveLoginHash(profile.email, normalized, defaultKdfIterations);
+        const challenge = await getTwoFactorPasskeyChallenge(authedFetch, derived.hash);
+        const deviceResponse = await createTwoFactorPasskeyCredential(challenge);
+        const settings = await saveTwoFactorPasskey(authedFetch, {
+          name: normalizedName,
+          masterPasswordHash: derived.hash,
+          deviceResponse,
+        });
+        await refetchTwoFactorStatus();
+        onNotify('success', t('txt_two_step_passkey_added'));
+        return settings;
+      },
+
+      async deleteTwoFactorPasskey(id: number, masterPassword: string): Promise<TwoFactorPasskeySettings> {
+        if (!profile) throw new Error(t('txt_profile_unavailable'));
+        const normalized = String(masterPassword || '');
+        if (!normalized) throw new Error(t('txt_master_password_is_required'));
+        const derived = await deriveLoginHash(profile.email, normalized, defaultKdfIterations);
+        const settings = await deleteTwoFactorPasskeyApi(authedFetch, { id, masterPasswordHash: derived.hash });
+        await refetchTwoFactorStatus();
+        onNotify('success', t('txt_two_step_passkey_removed'));
+        return settings;
+      },
+
+      async disableTwoFactorPasskeys(masterPassword: string): Promise<void> {
+        if (!profile) throw new Error(t('txt_profile_unavailable'));
+        const normalized = String(masterPassword || '');
+        if (!normalized) throw new Error(t('txt_master_password_is_required'));
+        const derived = await deriveLoginHash(profile.email, normalized, defaultKdfIterations);
+        await disableTwoFactorPasskeysApi(authedFetch, derived.hash);
+        await refetchTwoFactorStatus();
+        onNotify('success', t('txt_two_step_passkeys_disabled'));
       },
 
       async getRecoveryCode(masterPassword: string): Promise<string> {
@@ -234,24 +351,33 @@ export default function useAccountSecurityActions(options: UseAccountSecurityAct
         const normalizedName = String(name || '').trim() || t('txt_account_passkey');
         const derived = await deriveLoginHash(profile.email, normalizedPassword, defaultKdfIterations);
         const options = await getAccountPasskeyAttestationOptions(authedFetch, derived.hash);
-        const pending = await createAccountPasskeyCredential(options);
+        const pending = await createAccountPasskeyCredential(options, directUnlock);
         let keySet = null;
         let savedWithoutDirectUnlock = false;
         if (directUnlock) {
           if (!session?.symEncKey || !session?.symMacKey) throw new Error(t('txt_vault_key_unavailable'));
-          try {
-            keySet = await buildAccountPasskeyPrfKeySet(pending, {
-              symEncKey: session.symEncKey,
-              symMacKey: session.symMacKey,
-            });
-          } catch (error) {
-            if (!(error instanceof AccountPasskeyPrfUnavailableError)) throw error;
+          if (!pending.supportsPrf) {
             const shouldSaveLoginOnly = await confirmSaveLoginOnlyAccountPasskey();
             if (!shouldSaveLoginOnly) {
               onNotify('warning', t('txt_account_passkey_not_saved'));
               return null;
             }
             savedWithoutDirectUnlock = true;
+          } else {
+            try {
+              keySet = await buildAccountPasskeyPrfKeySet(pending, {
+                symEncKey: session.symEncKey,
+                symMacKey: session.symMacKey,
+              });
+            } catch (error) {
+              if (!(error instanceof AccountPasskeyPrfUnavailableError)) throw error;
+              const shouldSaveLoginOnly = await confirmSaveLoginOnlyAccountPasskey();
+              if (!shouldSaveLoginOnly) {
+                onNotify('warning', t('txt_account_passkey_not_saved'));
+                return null;
+              }
+              savedWithoutDirectUnlock = true;
+            }
           }
         }
         const credential = await saveAccountPasskey(authedFetch, {
@@ -380,6 +506,38 @@ export default function useAccountSecurityActions(options: UseAccountSecurityAct
         });
       },
 
+      openRemoveSelectedDevices(devices: AuthorizedDevice[]) {
+        const selectedDevices = devices.filter((device) => String(device.identifier || '').trim());
+        if (selectedDevices.length === 0) {
+          onNotify('warning', t('txt_no_devices_selected'));
+          return;
+        }
+        const includesCurrentDevice = selectedDevices.some((device) => device.identifier === getCurrentDeviceIdentifier());
+        onSetConfirm({
+          title: t('txt_remove_selected_devices', { count: selectedDevices.length }),
+          message: includesCurrentDevice
+            ? t('txt_remove_selected_devices_and_sign_out_current', { count: selectedDevices.length })
+            : t('txt_remove_selected_devices_confirm', { count: selectedDevices.length }),
+          danger: true,
+          onConfirm: () => {
+            onSetConfirm(null);
+            void (async () => {
+              try {
+                await deleteAuthorizedDevices(authedFetch, selectedDevices);
+                onNotify('success', t('txt_selected_devices_removed', { count: selectedDevices.length }));
+                if (includesCurrentDevice) {
+                  onLogoutNow();
+                  return;
+                }
+                await refetchAuthorizedDevices();
+              } catch (error) {
+                onNotify('error', error instanceof Error ? error.message : t('txt_remove_selected_devices_failed'));
+              }
+            })();
+          },
+        });
+      },
+
       openRevokeAllDeviceTrust() {
         onSetConfirm({
           title: t('txt_revoke_all_trusted_devices'),
@@ -403,13 +561,18 @@ export default function useAccountSecurityActions(options: UseAccountSecurityAct
       openRemoveAllDevices() {
         onSetConfirm({
           title: t('txt_remove_all_devices'),
-          message: t('txt_remove_all_devices_and_sign_out_all_sessions'),
+          message: `${t('txt_remove_all_devices_and_sign_out_all_sessions')}\n${t('txt_enter_master_password_to_continue')}`,
           danger: true,
-          onConfirm: () => {
+          requireMasterPassword: true,
+          onConfirm: (masterPassword) => {
             onSetConfirm(null);
             void (async () => {
               try {
-                await deleteAllAuthorizedDevices(authedFetch);
+                if (!profile) throw new Error(t('txt_profile_unavailable'));
+                const normalizedPassword = String(masterPassword || '');
+                if (!normalizedPassword.trim()) throw new Error(t('txt_master_password_is_required'));
+                const derived = await deriveLoginHash(profile.email, normalizedPassword, defaultKdfIterations);
+                await deleteAllAuthorizedDevices(authedFetch, derived.hash);
                 onNotify('success', t('txt_all_devices_removed'));
                 onLogoutNow();
               } catch (error) {
@@ -434,7 +597,7 @@ export default function useAccountSecurityActions(options: UseAccountSecurityAct
       session?.symEncKey,
       session?.symMacKey,
       refetchAuthorizedDevices,
-      refetchTotpStatus,
+      refetchTwoFactorStatus,
     ]
   );
 }

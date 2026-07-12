@@ -363,16 +363,34 @@
 }
 
 .backup-browser-nav {
-  @apply mb-2.5;
+  @apply mb-2.5 flex items-center justify-between gap-2;
+}
+
+.backup-browser-nav-left {
+  @apply min-w-0;
 }
 
 .backup-browser-list {
-  @apply overflow-hidden rounded-xl border bg-white;
+  @apply overflow-hidden rounded-lg border bg-white;
   border: 1px solid var(--line);
 }
 
+.backup-browser-head {
+  @apply grid items-center gap-3 px-3 py-2 text-[11px] font-bold uppercase tracking-[0.08em];
+  grid-template-columns: minmax(180px, 1fr) minmax(150px, 0.75fr) minmax(92px, 0.4fr) minmax(220px, auto);
+  border-bottom: 1px solid var(--line);
+  color: #64748b;
+  background: #f8fafc;
+}
+
+.backup-browser-head span:nth-child(2),
+.backup-browser-head span:nth-child(3),
+.backup-browser-head span:nth-child(4) {
+  text-align: right;
+}
+
 .backup-browser-pagination {
-  @apply mt-2.5 flex items-center justify-end gap-2.5;
+  @apply mt-2.5 flex items-center justify-center gap-2.5;
 }
 
 .backup-browser-page-indicator {
@@ -385,13 +403,15 @@
 }
 
 .backup-browser-row {
-  @apply grid items-center gap-2.5 px-3 py-2.5;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  @apply grid items-center gap-3 px-3 py-2;
+  grid-template-columns: minmax(180px, 1fr) minmax(150px, 0.75fr) minmax(92px, 0.4fr) minmax(220px, auto);
+  min-height: 48px;
 }
 
 .backup-browser-entry {
   @apply inline-flex cursor-pointer items-center gap-2 border-0 bg-transparent p-0 text-left;
   color: #0f172a;
+  min-width: 0;
 }
 
 .backup-browser-entry.file {
@@ -404,18 +424,27 @@
 }
 
 .backup-browser-meta {
-  @apply grid justify-items-end gap-1 text-right text-[13px];
+  @apply block text-right text-[13px];
   color: #64748b;
+}
+
+.backup-browser-size {
+  font-variant-numeric: tabular-nums;
 }
 
 .backup-browser-actions {
   justify-content: flex-end;
+  flex-wrap: nowrap;
 }
 
 .backup-browser-empty {
   @apply rounded-xl px-3.5 py-[18px] text-center;
   border: 1px dashed var(--line);
   color: #64748b;
+}
+
+.backup-browser-refresh-prompt {
+  @apply inline-flex flex-wrap items-center justify-center gap-2;
 }
 
 .backup-inline-note {
@@ -506,6 +535,275 @@
 
 .settings-field-note {
   @apply mb-2;
+}
+
+.settings-page-categorized {
+  @apply min-w-0;
+}
+
+.settings-category-layout {
+  @apply grid min-w-0 gap-5;
+}
+
+.settings-category-tabs {
+  @apply flex min-w-0 items-center gap-1 border;
+  width: fit-content;
+  max-width: 100%;
+  padding: 8px;
+  border-radius: 14px;
+  border-color: var(--line);
+  background: var(--panel);
+}
+
+.settings-category-tab {
+  @apply relative flex h-9 cursor-pointer items-center rounded-lg border-0 px-3 text-sm font-bold;
+  background: transparent;
+  color: var(--muted-strong);
+  transition:
+    background var(--dur-fast) var(--ease-smooth),
+    color var(--dur-fast) var(--ease-smooth),
+    box-shadow var(--dur-fast) var(--ease-smooth);
+}
+
+.settings-category-tab:hover {
+  color: var(--primary-strong);
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
+}
+
+.settings-category-tab.active {
+  color: var(--primary-strong);
+  background: color-mix(in srgb, var(--primary) 12%, var(--panel));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 22%, var(--line));
+}
+
+.settings-category-tab.active::after {
+  display: none;
+}
+
+.settings-category-panel {
+  @apply min-w-0;
+  width: 50%;
+  min-width: 700px;
+  max-width: 50%;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel);
+}
+
+.settings-section-stack {
+  @apply grid min-w-0 gap-0;
+}
+
+.settings-submodule {
+  @apply min-w-0 border-0 border-b px-0 py-5;
+  border-color: var(--line);
+  background: transparent;
+}
+
+.settings-submodule:first-child {
+  padding-top: 0;
+}
+
+.settings-submodule:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.settings-submodule h3 {
+  @apply mb-4 mt-0 text-base font-extrabold;
+  color: var(--text);
+}
+
+.settings-placeholder-module {
+  background: transparent;
+}
+
+.settings-vertical-fields {
+  @apply grid gap-3;
+}
+
+.settings-vertical-fields .field {
+  @apply mb-0;
+}
+
+.settings-vertical-fields + .btn {
+  margin-top: 14px;
+}
+
+.settings-category-panel > .settings-section-stack > .settings-submodule:only-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.two-step-recovery-warning {
+  @apply rounded-xl border p-4;
+  border-color: color-mix(in srgb, #f97316 28%, var(--line));
+  background: color-mix(in srgb, #f97316 7%, var(--panel));
+}
+
+.settings-submodule.two-step-recovery-warning {
+  border-bottom-color: color-mix(in srgb, #f97316 28%, var(--line));
+}
+
+.two-step-recovery-warning + .two-step-providers-module {
+  border-top: 0;
+}
+
+.two-step-providers-module .settings-module-head {
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.two-step-warning-head {
+  @apply mb-2 flex items-center gap-2 text-sm font-extrabold;
+  color: #c2410c;
+  padding-top: 10px;
+}
+
+.two-step-recovery-warning p {
+  @apply mb-3 mt-0 text-sm leading-6;
+  color: #c2410c;
+}
+
+.two-step-recovery-code-dialog-value {
+  @apply my-5 text-center text-base font-extrabold tracking-[0.12em];
+  color: #c2187a;
+  word-spacing: 0.55em;
+  overflow-wrap: anywhere;
+}
+
+.two-step-provider-list {
+  @apply grid;
+}
+
+.two-step-provider-row {
+  @apply grid min-w-0 items-center gap-4 border-b py-5;
+  grid-template-columns: 76px minmax(0, 1fr) auto;
+  border-color: var(--line);
+}
+
+.two-step-provider-row:first-child {
+  padding-top: 0;
+}
+
+.two-step-provider-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.two-step-provider-icon {
+  @apply flex h-14 w-14 items-center justify-center rounded-xl;
+  color: var(--primary-strong);
+  background: color-mix(in srgb, var(--primary) 9%, var(--panel));
+}
+
+.two-step-provider-yubico {
+  @apply text-base font-extrabold lowercase;
+  color: #54a51c;
+  background: transparent;
+}
+
+.two-step-provider-copy {
+  @apply grid min-w-0 gap-1;
+}
+
+.two-step-provider-title {
+  @apply flex min-w-0 flex-wrap items-center gap-2;
+}
+
+.two-step-provider-title strong {
+  @apply text-base font-bold;
+  color: var(--text);
+}
+
+.two-step-provider-copy span {
+  @apply text-sm leading-5;
+  color: var(--muted-strong);
+}
+
+.two-step-enabled-badge {
+  @apply inline-flex min-h-6 items-center rounded-md border px-2 text-xs font-extrabold leading-none;
+  border-color: color-mix(in srgb, var(--success) 28%, var(--line));
+  background: color-mix(in srgb, var(--success) 10%, var(--panel));
+  color: var(--success);
+}
+
+.totp-manage-dialog-body {
+  @apply mt-3;
+}
+
+.totp-manage-dialog-body .totp-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.totp-manage-dialog-body .totp-qr {
+  justify-self: center;
+  width: 220px;
+}
+
+.totp-manage-dialog-body .totp-secret-input-wrap {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.totp-manage-dialog-body .totp-secret-input {
+  font-size: 13px;
+}
+
+.yubikey-manage-dialog-body {
+  @apply mt-3 space-y-4;
+}
+
+.settings-plain-steps {
+  @apply m-0 space-y-1 border-b pb-3 pl-5;
+  border-color: var(--line);
+  color: var(--text);
+}
+
+.yubikey-input-row {
+  @apply grid items-center gap-2;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.yubikey-stored-key {
+  @apply block min-h-9 rounded-md border border-transparent px-0 py-2 text-sm text-slate-800 dark:text-slate-100;
+  overflow-wrap: anywhere;
+}
+
+.yubikey-remove-btn {
+  @apply h-9 w-9 p-0;
+}
+
+.settings-checkbox-block {
+  @apply space-y-2;
+}
+
+.checkbox-inline {
+  @apply flex items-center gap-2 text-sm;
+}
+
+.checkbox-inline input {
+  @apply h-4 w-4;
+}
+
+.dialog-close-btn {
+  @apply absolute right-3 top-3 flex h-9 w-9 cursor-pointer items-center justify-center rounded-full border-0 p-0;
+  background: transparent;
+  color: var(--muted-strong);
+  transition:
+    background-color var(--dur-fast) var(--ease-smooth),
+    color var(--dur-fast) var(--ease-smooth);
+}
+
+.dialog-close-btn:hover:not(:disabled) {
+  background: var(--panel-soft);
+  color: var(--text);
+}
+
+.dialog-close-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .settings-modules-grid {
@@ -1060,7 +1358,7 @@
 }
 
 .settings-module-head {
-  @apply mb-[5px] flex items-center justify-between gap-3;
+  @apply mb-[10px] flex items-center justify-between gap-3;
 }
 
 .settings-module-head h3 {
@@ -1090,8 +1388,35 @@
   accent-color: var(--primary);
 }
 
+.account-passkey-list,
 .account-passkeys-list {
   @apply mt-3 grid gap-2;
+}
+
+.two-factor-passkey-register-row {
+  @apply flex min-w-0 items-center gap-2;
+}
+
+.two-factor-passkey-register-row .input {
+  @apply min-w-0 flex-1;
+}
+
+.two-factor-passkey-register-row .btn {
+  @apply shrink-0;
+  min-width: 86px;
+}
+
+.two-factor-passkey-list-block {
+  @apply grid gap-2;
+}
+
+.settings-list-label {
+  @apply text-sm font-extrabold;
+  color: var(--muted);
+}
+
+.two-factor-passkey-danger-actions {
+  @apply justify-end pt-1;
 }
 
 .account-passkey-row {
@@ -1099,6 +1424,17 @@
   grid-template-columns: minmax(0, 1fr) auto auto;
   border-color: var(--line);
   background: var(--panel);
+}
+
+.two-factor-passkey-row {
+  grid-template-columns: 2rem minmax(0, 1fr) auto;
+}
+
+.account-passkey-index {
+  @apply inline-grid h-8 w-8 place-items-center rounded-lg text-sm font-extrabold;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--panel) 80%, var(--panel-2));
 }
 
 .account-passkey-main {
@@ -1165,6 +1501,19 @@
   padding: 23px .875rem;
   border-color: var(--line);
   background: var(--panel);
+}
+
+.settings-category-panel .sensitive-action {
+  border-right: 0;
+  border-left: 0;
+  border-radius: 0;
+  padding-right: 0;
+  padding-left: 0;
+  background: transparent;
+}
+
+.settings-category-panel > .settings-section-stack > .settings-submodule:only-child.sensitive-action {
+  border-top: 0;
 }
 
 .sensitive-action h4 {
@@ -1491,8 +1840,12 @@
   table-layout: fixed;
 }
 
+.authorized-devices-col-select {
+  width: 4%;
+}
+
 .authorized-devices-col-device {
-  width: 28%;
+  width: 26%;
 }
 
 .authorized-devices-col-type {
@@ -1513,6 +1866,12 @@
 
 .authorized-devices-col-actions {
   width: 26%;
+}
+
+.authorized-device-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: #2563eb;
 }
 
 .authorized-devices-table td:first-child {

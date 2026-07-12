@@ -7,6 +7,7 @@ import { t } from '@/lib/i18n';
 interface PendingAuthRequestsPanelProps {
   pendingAuthRequests: AuthRequest[];
   pendingAuthRequestsLoading: boolean;
+  pendingAuthRequestsRefreshing?: boolean;
   onRefreshPendingAuthRequests: () => Promise<void>;
   onApproveAuthRequest: (request: AuthRequest) => Promise<void>;
   onDenyAuthRequest: (request: AuthRequest) => Promise<void>;
@@ -22,6 +23,7 @@ function formatDateTime(value: string | null | undefined): string {
 
 export default function PendingAuthRequestsPanel(props: PendingAuthRequestsPanelProps) {
   const [authRequestSubmittingId, setAuthRequestSubmittingId] = useState<string | null>(null);
+  const refreshing = props.pendingAuthRequestsLoading || !!props.pendingAuthRequestsRefreshing;
 
   async function approveAuthRequest(authRequest: AuthRequest): Promise<void> {
     if (authRequestSubmittingId) return;
@@ -50,10 +52,10 @@ export default function PendingAuthRequestsPanel(props: PendingAuthRequestsPanel
         <button
           type="button"
           className="btn btn-secondary small"
-          disabled={props.pendingAuthRequestsLoading}
+          disabled={refreshing}
           onClick={() => void props.onRefreshPendingAuthRequests()}
         >
-          <RefreshCw size={14} className="btn-icon" />
+          <RefreshCw size={14} className={`btn-icon${refreshing ? ' btn-icon-spin' : ''}`} />
           {t('txt_refresh')}
         </button>
       </div>

@@ -1,4 +1,4 @@
-import { Env, Attachment, Cipher, DEFAULT_DEV_SECRET } from '../types';
+import { Env, Attachment, Cipher } from '../types';
 import { notifyUserCipherUpdate, notifyUserVaultSync } from '../durable/notifications-hub';
 import { StorageService } from '../services/storage';
 import { jsonResponse, errorResponse } from '../utils/response';
@@ -124,6 +124,10 @@ async function processAttachmentUpload(
   }
 
   const path = getAttachmentObjectKey(cipherId, attachment.id);
+  if (await getBlobObject(env, path)) {
+    return errorResponse('Attachment file has already been uploaded', 409);
+  }
+
   try {
     await putBlobObject(env, path, upload.body, {
       size: upload.size,
@@ -167,7 +171,7 @@ export async function handleCreateAttachment(
   const storage = new StorageService(env.DB);
 
   // Verify cipher exists and belongs to user
-  const cipher = await storage.getCipher(cipherId);
+  const cipher = await storage.getCipherForUser(cipherId, userId);
   if (!cipher || cipher.userId !== userId) {
     return errorResponse('Cipher not found', 404);
   }
@@ -205,7 +209,7 @@ export async function handleCreateAttachment(
   await storage.saveAttachment(attachment);
 
   // Add attachment to cipher
-  await storage.addAttachmentToCipher(cipherId, attachmentId);
+  await storage.addAttachmentToCipherForUser(cipherId, attachmentId, userId);
 
   // Update cipher revision date
   const revisionInfo = await storage.updateCipherRevisionDate(cipherId);
@@ -215,7 +219,7 @@ export async function handleCreateAttachment(
   }
 
   // Get updated cipher for response
-  const updatedCipher = await storage.getCipher(cipherId);
+  const updatedCipher = await storage.getCipherForUser(cipherId, userId);
   const attachments = await storage.getAttachmentsByCipher(cipherId);
   const jwtSecret = getSafeJwtSecret(env);
   if (!jwtSecret) {
@@ -244,13 +248,13 @@ export async function handleUploadAttachment(
   const storage = new StorageService(env.DB);
 
   // Verify cipher exists and belongs to user
-  const cipher = await storage.getCipher(cipherId);
+  const cipher = await storage.getCipherForUser(cipherId, userId);
   if (!cipher || cipher.userId !== userId) {
     return errorResponse('Cipher not found', 404);
   }
 
   // Verify attachment exists
-  const attachment = await storage.getAttachment(attachmentId);
+  const attachment = await storage.getAttachmentForUser(attachmentId, userId);
   if (!attachment || attachment.cipherId !== cipherId) {
     return errorResponse('Attachment not found', 404);
   }
@@ -283,12 +287,12 @@ export async function handlePublicUploadAttachment(
   }
 
   const storage = new StorageService(env.DB);
-  const cipher = await storage.getCipher(cipherId);
+  const cipher = await storage.getCipherForUser(cipherId, claims.userId);
   if (!cipher || cipher.userId !== claims.userId) {
     return errorResponse('Cipher not found', 404);
   }
 
-  const attachment = await storage.getAttachment(attachmentId);
+  const attachment = await storage.getAttachmentForUser(attachmentId, claims.userId);
   if (!attachment || attachment.cipherId !== cipherId) {
     return errorResponse('Attachment not found', 404);
   }
@@ -308,13 +312,13 @@ export async function handleGetAttachment(
   const storage = new StorageService(env.DB);
 
   // Verify cipher exists and belongs to user
-  const cipher = await storage.getCipher(cipherId);
+  const cipher = await storage.getCipherForUser(cipherId, userId);
   if (!cipher || cipher.userId !== userId) {
     return errorResponse('Cipher not found', 404);
   }
 
   // Verify attachment exists
-  const attachment = await storage.getAttachment(attachmentId);
+  const attachment = await storage.getAttachmentForUser(attachmentId, userId);
   if (!attachment || attachment.cipherId !== cipherId) {
     return errorResponse('Attachment not found', 404);
   }
@@ -349,12 +353,12 @@ export async function handleUpdateAttachmentMetadata(
 ): Promise<Response> {
   const storage = new StorageService(env.DB);
 
-  const cipher = await storage.getCipher(cipherId);
+  const cipher = await storage.getCipherForUser(cipherId, userId);
   if (!cipher || cipher.userId !== userId) {
     return errorResponse('Cipher not found', 404);
   }
 
-  const attachment = await storage.getAttachment(attachmentId);
+  const attachment = await storage.getAttachmentForUser(attachmentId, userId);
   if (!attachment || attachment.cipherId !== cipherId) {
     return errorResponse('Attachment not found', 404);
   }
@@ -405,10 +409,8 @@ export async function handlePublicDownloadAttachment(
   cipherId: string,
   attachmentId: string
 ): Promise<Response> {
-  const secret = (env.JWT_SECRET || '').trim();
-  if (!secret || secret.length < LIMITS.auth.jwtSecretMinLength || secret === DEFAULT_DEV_SECRET) {
-    return errorResponse('Server configuration error', 500);
-  }
+  const secret = getSafeJwtSecret(env);
+  if (!secret) return errorResponse('Server configuration error', 500);
 
   const url = new URL(request.url);
   const token = url.searchParams.get('token');
@@ -418,7 +420,7 @@ export async function handlePublicDownloadAttachment(
   }
 
   // Verify token
-  const claims = await verifyFileDownloadToken(token, env.JWT_SECRET);
+  const claims = await verifyFileDownloadToken(token, secret);
   if (!claims) {
     return errorResponse('Invalid or expired token', 401);
   }
@@ -437,15 +439,14 @@ export async function handlePublicDownloadAttachment(
   }
 
   const path = getAttachmentObjectKey(cipherId, attachmentId);
-  const object = await getBlobObject(env, path);
-
-  if (!object) {
-    return errorResponse('Attachment file not found', 404);
-  }
-
   const firstUse = await storage.consumeAttachmentDownloadToken(claims.jti, claims.exp);
   if (!firstUse) {
     return errorResponse('Invalid or expired token', 401);
+  }
+
+  const object = await getBlobObject(env, path);
+  if (!object) {
+    return errorResponse('Attachment file not found', 404);
   }
 
   return new Response(object.body, {
@@ -471,13 +472,13 @@ export async function handleDeleteAttachment(
   const storage = new StorageService(env.DB);
 
   // Verify cipher exists and belongs to user
-  const cipher = await storage.getCipher(cipherId);
+  const cipher = await storage.getCipherForUser(cipherId, userId);
   if (!cipher || cipher.userId !== userId) {
     return errorResponse('Cipher not found', 404);
   }
 
   // Verify attachment exists
-  const attachment = await storage.getAttachment(attachmentId);
+  const attachment = await storage.getAttachmentForUser(attachmentId, userId);
   if (!attachment || attachment.cipherId !== cipherId) {
     return errorResponse('Attachment not found', 404);
   }
@@ -486,7 +487,7 @@ export async function handleDeleteAttachment(
   await deleteBlobObject(env, path);
 
   // Delete attachment metadata
-  await storage.deleteAttachment(attachmentId);
+  await storage.deleteAttachmentForUser(attachmentId, userId);
 
   // Update cipher revision date
   const revisionInfo = await storage.updateCipherRevisionDate(cipherId);
@@ -501,7 +502,7 @@ export async function handleDeleteAttachment(
   }
 
   // Get updated cipher for response
-  const updatedCipher = await storage.getCipher(cipherId);
+  const updatedCipher = await storage.getCipherForUser(cipherId, userId);
   const attachments = await storage.getAttachmentsByCipher(cipherId);
   const cipherResponse = cipherToResponse(updatedCipher!, attachments);
 
