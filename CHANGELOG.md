@@ -22,6 +22,8 @@
 ### 修复
 - 修复 `caches.default` 在 Node.js 自托管模式下未定义的问题，新增 `default` getter 返回默认 Cache 实例
 - 修复 `BackupTransferRunnerStub` 在定时任务调用时抛出错误导致日志噪音的问题，对 `/internal/run-scheduled-backups` 路径返回 409 让调用方静默跳过
+- 修复 `package-lock.json` 与 `package.json` 不同步导致 Docker 构建 `npm ci` 失败的问题
+- 修复 Docker 镜像 Node.js 版本过低（v20）导致 `miniflare`、`undici`、`wrangler` 等依赖触发 EBADENGINE 警告的问题，升级 `Dockerfile.selfhosted` 基础镜像至 `node:22-alpine`
 
 ### 同步上游 v1.7.2 → v1.7.4 主要功能
 - 密码生成器（Password Generator）功能
