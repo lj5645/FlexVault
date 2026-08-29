@@ -102,6 +102,28 @@ async function appShellNavigation(request) {
   );
 }
 
+async function connectorNavigation(request) {
+  const runtimeCache = await caches.open(RUNTIME_CACHE);
+  try {
+    const response = await fetch(request);
+    if (isCacheableResponse(response)) {
+      await runtimeCache.put(request, response.clone());
+      await trimRuntimeCache(runtimeCache, 120);
+    }
+    return response;
+  } catch {
+    const shellCache = await caches.open(APP_SHELL_CACHE);
+    const cached =
+      (await shellCache.match(request, { ignoreSearch: true }))
+      || (await runtimeCache.match(request, { ignoreSearch: true }))
+      || (await matchLegacyRuntimeCache(request));
+    return cached || new Response('WebAuthn connector is unavailable while offline.', {
+      status: 503,
+      headers: { 'Content-Type': 'text/plain; charset=UTF-8' },
+    });
+  }
+}
+
 async function trimRuntimeCache(cache, maxEntries) {
   const keys = await cache.keys();
   if (keys.length <= maxEntries) return;
@@ -144,6 +166,13 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url);
   if (NEVER_CACHE_PATH_RE.test(url.pathname)) return;
+
+  // Connector navigations are protocol pages, not application routes. They must
+  // never be replaced with the SPA shell, even when the device is offline.
+  if (url.pathname.endsWith('-connector.html')) {
+    event.respondWith(connectorNavigation(request));
+    return;
+  }
 
   if (request.mode === 'navigate') {
     event.respondWith(appShellNavigation(request));
@@ -229,39 +258,12 @@ function searchIndexPolicyPlugin(isDemo: boolean): Plugin {
   };
 }
 
-function resourcePriorityPlugin(isDemo: boolean): Plugin {
-  return {
-    name: 'nodewarden-resource-priority',
-    enforce: 'post' as const,
-    transformIndexHtml(html: string) {
-      if (isDemo || !html.includes('/assets/app-suite-')) return html;
-
-      const scriptMatch = html.match(/^\s*<script type="module" crossorigin src="\/assets\/index-[^"]+\.js"><\/script>\s*$/m);
-      const appSuiteMatch = html.match(/^\s*<link rel="modulepreload" crossorigin href="\/assets\/app-suite-[^"]+\.js">\s*$/m);
-      const stylesheetMatch = html.match(/^\s*<link rel="stylesheet" crossorigin href="\/assets\/index-[^"]+\.css">\s*$/m);
-
-      if (!scriptMatch || !appSuiteMatch || !stylesheetMatch) return html;
-
-      const prioritizedTags = [
-        stylesheetMatch[0].replace('rel="stylesheet"', 'rel="stylesheet" fetchpriority="high"'),
-        appSuiteMatch[0].replace('rel="modulepreload"', 'rel="modulepreload" fetchpriority="high"'),
-        scriptMatch[0].replace('type="module"', 'type="module" fetchpriority="high"'),
-      ].join('\n');
-
-      return html
-        .replace(scriptMatch[0], '')
-        .replace(appSuiteMatch[0], '')
-        .replace(stylesheetMatch[0], prioritizedTags);
-    },
-  };
-}
-
 export default defineConfig(({ mode }) => {
   const isDemo = mode === 'demo';
 
   return {
     root: rootDir,
-    plugins: [preact(), searchIndexPolicyPlugin(isDemo), resourcePriorityPlugin(isDemo), pwaServiceWorkerPlugin(isDemo)],
+    plugins: [preact(), searchIndexPolicyPlugin(isDemo), pwaServiceWorkerPlugin(isDemo)],
     define: {
       __NODEWARDEN_DEMO__: JSON.stringify(isDemo),
     },
@@ -282,41 +284,29 @@ export default defineConfig(({ mode }) => {
       sourcemap: false,
       target: 'esnext',
       chunkSizeWarningLimit: 800,
-      rollupOptions: {
-        treeshake: {
-          preset: 'smallest',
+      rolldownOptions: {
+        checks: {
+          pluginTimings: false,
         },
         output: {
-          manualChunks(id) {
-            const normalized = id.replace(/\\/g, '/');
-
-            const localeMatch = normalized.match(/\/src\/lib\/i18n\/locales\/(.+)\.ts$/);
-            if (localeMatch) {
-              if (localeMatch[1] === 'en') return undefined;
-              return `i18n-${localeMatch[1]}`;
-            }
-
-            if (
-              !isDemo &&
-              (
-                normalized.includes('/src/components/VaultPage.tsx') ||
-                normalized.includes('/src/components/ImportPage.tsx') ||
-                normalized.includes('/src/lib/import-') ||
-                normalized.includes('/src/lib/export-formats.ts') ||
-                normalized.includes('/src/components/SendsPage.tsx') ||
-                normalized.includes('/src/components/TotpCodesPage.tsx') ||
-                normalized.includes('/src/components/DomainRulesPage.tsx') ||
-                normalized.includes('/src/components/BackupCenterPage.tsx') ||
-                normalized.includes('/src/components/backup-center/') ||
-                normalized.includes('/src/components/SettingsPage.tsx') ||
-                normalized.includes('/src/components/SecurityDevicesPage.tsx') ||
-                normalized.includes('/src/components/AdminPage.tsx')
-              )
-            ) {
-              return 'app-suite';
-            }
-
-            return undefined;
+          codeSplitting: {
+            groups: [
+              {
+                name: 'shared',
+                minShareCount: 2,
+                minSize: 50 * 1024,
+                priority: 10,
+              },
+              {
+                name(id) {
+                  const normalized = id.replace(/\\/g, '/');
+                  const localeMatch = normalized.match(/\/src\/lib\/i18n\/locales\/(.+)\.ts$/);
+                  return localeMatch && localeMatch[1] !== 'en' ? `i18n-${localeMatch[1]}` : null;
+                },
+                test: /[\\/]src[\\/]lib[\\/]i18n[\\/]locales[\\/]/,
+                priority: 20,
+              },
+            ],
           },
         },
       },

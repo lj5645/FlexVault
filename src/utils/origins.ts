@@ -8,6 +8,13 @@ export const OFFICIAL_BITWARDEN_BROWSER_EXTENSION_ORIGINS = [
   'chrome-extension://ccnckbpmaceehanjmeomladnmlffdjgn',
 ] as const;
 
+// Bitwarden desktop is migrating from file:// to this privileged Electron
+// origin. Official clients keep the legacy file:// path as a compatibility
+// fallback while self-hosted servers add CORS support for the new origin.
+export const OFFICIAL_BITWARDEN_DESKTOP_ORIGINS = [
+  'bw-desktop-file://bundle',
+] as const;
+
 export function normalizeOrigin(value: unknown): string | null {
   const raw = String(value || '').trim();
   if (!raw) return null;
@@ -30,10 +37,20 @@ export function isBrowserExtensionOrigin(origin: unknown): boolean {
   );
 }
 
+export function isOfficialBitwardenDesktopOrigin(origin: unknown): boolean {
+  const normalized = normalizeOrigin(origin);
+  return !!normalized && OFFICIAL_BITWARDEN_DESKTOP_ORIGINS.includes(
+    normalized as (typeof OFFICIAL_BITWARDEN_DESKTOP_ORIGINS)[number]
+  );
+}
+
 export function getConfiguredWebAuthnAllowedOrigins(
   env: Pick<Env, 'WEBAUTHN_ALLOWED_ORIGINS'>
 ): string[] {
-  const seen = new Set<string>(OFFICIAL_BITWARDEN_BROWSER_EXTENSION_ORIGINS);
+  const seen = new Set<string>([
+    ...OFFICIAL_BITWARDEN_BROWSER_EXTENSION_ORIGINS,
+    ...OFFICIAL_BITWARDEN_DESKTOP_ORIGINS,
+  ]);
   for (const item of String(env.WEBAUTHN_ALLOWED_ORIGINS || '').split(',')) {
     const origin = normalizeOrigin(item);
     if (origin) seen.add(origin);

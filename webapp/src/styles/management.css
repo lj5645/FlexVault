@@ -99,7 +99,7 @@
   @apply inline-flex h-[22px] w-[22px] shrink-0 cursor-pointer items-center justify-center rounded-full p-0 text-[13px] font-extrabold leading-none;
   border: 1px solid #bfd1f3;
   background: #eef4ff;
-  color: #1d4ed8;
+  color: var(--primary-hover);
 }
 
 .backup-help-trigger:hover,
@@ -194,7 +194,7 @@
 }
 
 .backup-recommendation-step a {
-  color: #1d4ed8;
+  color: var(--primary-hover);
   font-weight: 700;
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -316,14 +316,14 @@
 }
 
 .backup-interval-preset:hover:not(:disabled) {
-  border-color: #2563eb;
-  color: #2563eb;
+  border-color: var(--primary);
+  color: var(--primary);
   background: #eff6ff;
 }
 
 .backup-interval-preset.active {
-  border-color: #2563eb;
-  background: #2563eb;
+  border-color: var(--primary);
+  background: var(--primary);
   color: #fff;
 }
 
@@ -1786,7 +1786,7 @@
 }
 
 .restore-progress-item.active {
-  color: #1d4ed8;
+  color: var(--primary-hover);
 }
 
 .restore-progress-item.done {
@@ -1799,7 +1799,7 @@
 }
 
 .restore-progress-item.active .restore-progress-dot {
-  background: #1d4ed8;
+  background: var(--primary-hover);
 }
 
 .restore-progress-item.done .restore-progress-dot {
@@ -1871,7 +1871,7 @@
 .authorized-device-checkbox {
   width: 16px;
   height: 16px;
-  accent-color: #2563eb;
+  accent-color: var(--primary);
 }
 
 .authorized-devices-table td:first-child {
@@ -1879,7 +1879,9 @@
 }
 
 .authorized-devices-actions {
-  flex-wrap: nowrap;
+  /* Wrap instead of clipping: four non-shrinking buttons overflow the
+     fixed 26% actions column at common widths, hiding Delete entirely. */
+  flex-wrap: wrap;
   gap: 6px;
 }
 

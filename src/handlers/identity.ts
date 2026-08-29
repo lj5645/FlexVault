@@ -25,7 +25,8 @@ import {
 import { isAuthRequestExpired } from '../services/storage-auth-request-repo';
 import { createPasskeyUserVerificationToken } from '../utils/user-verification-token';
 import { constantTimeEquals, verifyApiKey } from '../utils/api-key';
-import { isYubiKeyEnabled, userYubiKeyPublicIds, verifyYubicoOtp, yubicoCredentialsFromEnv, yubiKeyPublicIdFromOtp, type YubicoApiCredentials } from '../utils/yubico-otp';
+import { isYubiKeyEnabled, userYubiKeyPublicIds, verifyYubicoOtp, yubiKeyPublicIdFromOtp } from '../utils/yubico-otp';
+import { getYubicoCredentials, initializeYubicoCredentialsOnce } from '../services/yubico-config';
 
 const TWO_FACTOR_REMEMBER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const TWO_FACTOR_PROVIDER_AUTHENTICATOR = 0;
@@ -34,8 +35,6 @@ const TWO_FACTOR_PROVIDER_REMEMBER = 5;
 const TWO_FACTOR_PROVIDER_WEBAUTHN = 7;
 const TWO_FACTOR_PROVIDER_RECOVERY_CODE = 8;
 const WEB_REFRESH_COOKIE = 'nodewarden_web_refresh';
-const YUBICO_CLIENT_ID_CONFIG_KEY = 'globalSettings__yubico__clientId';
-const YUBICO_KEY_CONFIG_KEY = 'globalSettings__yubico__key';
 // Some UI surfaces use -1 for the recovery-code settings dialog. Login itself follows
 // the official Identity provider enum (RecoveryCode = 8), while request parsing remains
 // compatible with older/local provider values.
@@ -163,15 +162,6 @@ async function loginRateLimitKey(clientIdentifier: string, grantType: string, su
   return `${clientIdentifier}:login:${grantType}:${subjectHash}`;
 }
 
-async function getStoredYubicoCredentials(storage: StorageService, env: Env): Promise<YubicoApiCredentials | null> {
-  const fromEnv = yubicoCredentialsFromEnv(env);
-  if (fromEnv) return fromEnv;
-  const clientId = String(await storage.getConfigValue(YUBICO_CLIENT_ID_CONFIG_KEY) || '').trim();
-  if (!clientId) return null;
-  const secretKey = String(await storage.getConfigValue(YUBICO_KEY_CONFIG_KEY) || '').trim();
-  return { clientId, secretKey };
-}
-
 function buildRefreshCookie(request: Request, refreshToken: string, maxAgeSeconds: number): string {
   const isHttps = new URL(request.url).protocol === 'https:';
   const parts = [
@@ -216,6 +206,16 @@ function buildPreloginResponse(
     kdfIterations,
     kdfMemory,
     kdfParallelism,
+    // Current official servers expose the consolidated KDF model alongside
+    // the legacy flat fields. Keep both shapes while clients migrate.
+    kdfSettings: {
+      kdfType,
+      iterations: kdfIterations,
+      memory: kdfMemory,
+      parallelism: kdfParallelism,
+    },
+    salt: null,
+    // Preserve the historic NodeWarden aliases for older integrations.
     KdfSettings: {
       KdfType: kdfType,
       Iterations: kdfIterations,
@@ -507,8 +507,17 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
         if (!publicId || !effectiveYubiKeyPublicIds.includes(publicId)) {
           return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
         }
-        const credentials = await getStoredYubicoCredentials(storage, env);
-        if (!credentials || !await verifyYubicoOtp(env, normalizedTwoFactorToken, credentials)) {
+        let credentials = await getYubicoCredentials(env.DB);
+        let initializedWithCurrentOtp = false;
+        if (!credentials) {
+          const initialized = await initializeYubicoCredentialsOnce(env.DB, user.email, normalizedTwoFactorToken);
+          if (!initialized) {
+            return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
+          }
+          credentials = initialized.credentials;
+          initializedWithCurrentOtp = initialized.created;
+        }
+        if (!initializedWithCurrentOtp && !await verifyYubicoOtp(env, normalizedTwoFactorToken, credentials)) {
           return recordFailedTwoFactorAndBuildResponse(rateLimit, loginIdentifier);
         }
       } else if (normalizedTwoFactorProvider === String(TWO_FACTOR_PROVIDER_WEBAUTHN)) {

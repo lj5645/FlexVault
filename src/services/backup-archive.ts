@@ -2,6 +2,7 @@ import { zipSync, unzipSync, type UnzipFileInfo } from 'fflate';
 import type { Env } from '../types';
 import { APP_VERSION } from '../../shared/app-version';
 import { BACKUP_SETTINGS_CONFIG_KEY } from './backup-config';
+import { YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY } from './yubico-config';
 import { exportPortableBackupSettingsEnvelope } from './backup-settings-crypto';
 import {
   getAttachmentObjectKey,
@@ -16,6 +17,8 @@ import {
 // - Add persistent tables to BackupPayload, export SQL, manifest tableCounts,
 //   and validateBackupPayloadContents().
 // - Keep secrets and transient runtime rows sanitized before writing db.json.
+// - Runtime authentication state (devices, sessions, auth requests, remembered
+//   2FA devices, and one-time tokens) must never enter an instance backup.
 // - users.api_key is intentionally not exported.
 // - backup.settings.v1 is exported as portable-only; the current server runtime
 //   envelope must not leave the instance.
@@ -69,7 +72,6 @@ export interface BackupPayload {
     ciphers: SqlRow[];
     attachments: SqlRow[];
     webauthn_credentials?: SqlRow[];
-    trusted_two_factor_device_tokens?: SqlRow[];
   };
 }
 
@@ -111,7 +113,7 @@ function sanitizeConfigRowsForExport(rows: SqlRow[]): SqlRow[] {
   const sanitized: SqlRow[] = [];
   for (const row of rows) {
     const key = String(row.key || '').trim();
-    if (!key || key === BACKUP_RUNNER_LOCK_CONFIG_KEY) continue;
+    if (!key || key === BACKUP_RUNNER_LOCK_CONFIG_KEY || key === YUBICO_BOOTSTRAP_CLAIM_CONFIG_KEY) continue;
 
     if (key === BACKUP_SETTINGS_CONFIG_KEY) {
       const portableOnly = exportPortableBackupSettingsEnvelope(typeof row.value === 'string' ? row.value : null);
@@ -260,6 +262,25 @@ function ensureRowArray(value: unknown, table: string): SqlRow[] {
   return value as SqlRow[];
 }
 
+function normalizeParsedBackupDb(value: unknown): BackupPayload['db'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Backup archive database payload is invalid');
+  }
+  const source = value as Record<string, unknown>;
+  // Restore uses an explicit allowlist. Extra tables from old or modified
+  // archives, especially runtime authentication state, are intentionally ignored.
+  return {
+    config: source.config as SqlRow[],
+    users: source.users as SqlRow[],
+    domain_settings: source.domain_settings as SqlRow[],
+    user_revisions: source.user_revisions as SqlRow[],
+    folders: source.folders as SqlRow[],
+    ciphers: source.ciphers as SqlRow[],
+    attachments: source.attachments as SqlRow[],
+    webauthn_credentials: source.webauthn_credentials as SqlRow[] | undefined,
+  };
+}
+
 function createZipEntries(files: Record<string, Uint8Array>): Record<string, Uint8Array | [Uint8Array, { level: 0 | 1 | 6 }]> {
   const entries: Record<string, Uint8Array | [Uint8Array, { level: 0 | 1 | 6 }]> = {};
   for (const [path, bytes] of Object.entries(files)) {
@@ -313,10 +334,10 @@ export function parseBackupArchive(
 
   const decoder = new TextDecoder();
   let manifest: BackupManifest;
-  let db: BackupPayload['db'];
+  let rawDb: unknown;
   try {
     manifest = JSON.parse(decoder.decode(manifestBytes)) as BackupManifest;
-    db = JSON.parse(decoder.decode(dbBytes)) as BackupPayload['db'];
+    rawDb = JSON.parse(decoder.decode(dbBytes));
   } catch {
     throw new Error('Backup archive contains invalid JSON metadata');
   }
@@ -324,9 +345,7 @@ export function parseBackupArchive(
   if (manifest?.formatVersion !== BACKUP_FORMAT_VERSION) {
     throw new Error('Unsupported backup format version');
   }
-  if (!db || typeof db !== 'object') {
-    throw new Error('Backup archive database payload is invalid');
-  }
+  const db = normalizeParsedBackupDb(rawDb);
 
   const externalAttachmentKeys = new Set<string>(
     options.allowExternalAttachmentBlobs
@@ -363,7 +382,6 @@ export function validateBackupPayloadContents(
   const cipherRows = ensureRowArray(payload.db.ciphers, 'ciphers');
   const attachmentRows = ensureRowArray(payload.db.attachments, 'attachments');
   const accountPasskeyRows = ensureRowArray(payload.db.webauthn_credentials || [], 'webauthn_credentials');
-  const trustedTwoFactorTokenRows = ensureRowArray(payload.db.trusted_two_factor_device_tokens || [], 'trusted_two_factor_device_tokens');
   const externalAttachmentKeys = new Set<string>(
     options.allowExternalAttachmentBlobs
       ? (payload.manifest.attachmentBlobs || []).map((item) => `attachments/${String(item.cipherId || '').trim()}/${String(item.attachmentId || '').trim()}.bin`)
@@ -454,20 +472,6 @@ export function validateBackupPayloadContents(
     accountPasskeyCredentialIds.add(credentialId);
   }
 
-  const trustedTwoFactorTokens = new Set<string>();
-  for (const row of trustedTwoFactorTokenRows) {
-    const token = String(row.token || '').trim();
-    const userId = String(row.user_id || '').trim();
-    const deviceIdentifier = String(row.device_identifier || '').trim();
-    const expiresAt = Number(row.expires_at || 0);
-    if (!token || !userIds.has(userId) || !deviceIdentifier || !Number.isFinite(expiresAt) || expiresAt <= 0) {
-      throw new Error('Backup archive contains an invalid trusted two-factor device token row');
-    }
-    if (trustedTwoFactorTokens.has(token)) {
-      throw new Error(`Backup archive contains duplicate trusted two-factor device token: ${token}`);
-    }
-    trustedTwoFactorTokens.add(token);
-  }
 }
 
 export async function buildBackupArchive(
@@ -486,7 +490,7 @@ export async function buildBackupArchive(
     includeAttachments,
   });
   const encoder = new TextEncoder();
-  const [configRows, userRows, domainSettingsRows, revisionRows, folderRows, cipherRows, attachmentRows, accountPasskeyRows, trustedTwoFactorTokenRows] = await Promise.all([
+  const [configRows, userRows, domainSettingsRows, revisionRows, folderRows, cipherRows, attachmentRows, accountPasskeyRows] = await Promise.all([
     queryRows(env.DB, 'SELECT key, value FROM config ORDER BY key ASC'),
     queryRows(env.DB, 'SELECT id, email, name, master_password_hint, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, role, status, verify_devices, totp_secret, totp_recovery_code, yubikey_key1, yubikey_key2, yubikey_key3, yubikey_key4, yubikey_key5, yubikey_nfc, created_at, updated_at FROM users ORDER BY created_at ASC'),
     queryRows(env.DB, 'SELECT user_id, equivalent_domains, custom_equivalent_domains, excluded_global_equivalent_domains, updated_at FROM domain_settings ORDER BY user_id ASC'),
@@ -495,7 +499,6 @@ export async function buildBackupArchive(
     queryRows(env.DB, 'SELECT id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, archived_at, deleted_at FROM ciphers ORDER BY created_at ASC'),
     queryRows(env.DB, 'SELECT id, cipher_id, file_name, size, size_name, key FROM attachments ORDER BY cipher_id ASC, id ASC'),
     queryRows(env.DB, 'SELECT id, user_id, purpose, name, public_key, credential_id, counter, type, aa_guid, transports, encrypted_user_key, encrypted_public_key, encrypted_private_key, supports_prf, created_at, updated_at FROM webauthn_credentials ORDER BY created_at ASC'),
-    queryRows(env.DB, 'SELECT token, user_id, device_identifier, expires_at FROM trusted_two_factor_device_tokens WHERE expires_at >= ? ORDER BY user_id ASC, device_identifier ASC, expires_at DESC', date.getTime()),
   ]);
   const exportedConfigRows = sanitizeConfigRowsForExport(configRows);
   const exportedAttachmentRows = includeAttachments ? attachmentRows : [];
@@ -524,7 +527,6 @@ export async function buildBackupArchive(
       ciphers: cipherRows.length,
       attachments: exportedAttachmentRows.length,
       webauthn_credentials: accountPasskeyRows.length,
-      trusted_two_factor_device_tokens: trustedTwoFactorTokenRows.length,
     },
     includes: {
       attachments: includeAttachments,
@@ -548,7 +550,6 @@ export async function buildBackupArchive(
       ciphers: cipherRows,
       attachments: exportedAttachmentRows,
       webauthn_credentials: accountPasskeyRows,
-      trusted_two_factor_device_tokens: trustedTwoFactorTokenRows,
     }, null, BACKUP_JSON_INDENT)),
   };
 

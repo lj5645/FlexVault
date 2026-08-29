@@ -1,3 +1,34 @@
+export const WEB_CRYPTO_UNAVAILABLE_MESSAGE =
+  'Secure browser cryptography is unavailable. Open NodeWarden over HTTPS in a supported browser.';
+
+export class WebCryptoUnavailableError extends Error {
+  constructor() {
+    super(WEB_CRYPTO_UNAVAILABLE_MESSAGE);
+    this.name = 'WebCryptoUnavailableError';
+  }
+}
+
+interface WebCryptoEnvironment {
+  crypto?: Crypto;
+  isSecureContext?: boolean;
+}
+
+export function requireWebCrypto(
+  environment: WebCryptoEnvironment = globalThis as unknown as WebCryptoEnvironment
+): Crypto {
+  const cryptoApi = environment.crypto;
+  if (
+    environment.isSecureContext === false ||
+    !cryptoApi ||
+    typeof cryptoApi.getRandomValues !== 'function' ||
+    !cryptoApi.subtle ||
+    typeof cryptoApi.subtle.importKey !== 'function'
+  ) {
+    throw new WebCryptoUnavailableError();
+  }
+  return cryptoApi;
+}
+
 export function bytesToBase64(bytes: Uint8Array): string {
   let s = '';
   for (let i = 0; i < bytes.length; i += 1) s += String.fromCharCode(bytes[i]);
@@ -24,7 +55,7 @@ export function toBufferSource(bytes: Uint8Array): ArrayBuffer {
 
 export async function sha256Base64(value: string): Promise<string> {
   const bytes = new TextEncoder().encode(value);
-  const hash = await crypto.subtle.digest('SHA-256', toBufferSource(bytes));
+  const hash = await requireWebCrypto().subtle.digest('SHA-256', toBufferSource(bytes));
   return bytesToBase64(new Uint8Array(hash));
 }
 
@@ -51,7 +82,7 @@ function getHmacSha256Key(keyBytes: Uint8Array): Promise<CryptoKey> {
   return getCachedCryptoKey(
     hmacSha256KeyCache,
     keyBytes,
-    () => crypto.subtle.importKey('raw', toBufferSource(keyBytes), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+    () => requireWebCrypto().subtle.importKey('raw', toBufferSource(keyBytes), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
   );
 }
 
@@ -59,7 +90,7 @@ function getAesCbcEncryptKey(keyBytes: Uint8Array): Promise<CryptoKey> {
   return getCachedCryptoKey(
     aesCbcEncryptKeyCache,
     keyBytes,
-    () => crypto.subtle.importKey('raw', toBufferSource(keyBytes), { name: 'AES-CBC' }, false, ['encrypt'])
+    () => requireWebCrypto().subtle.importKey('raw', toBufferSource(keyBytes), { name: 'AES-CBC' }, false, ['encrypt'])
   );
 }
 
@@ -67,7 +98,7 @@ function getAesCbcDecryptKey(keyBytes: Uint8Array): Promise<CryptoKey> {
   return getCachedCryptoKey(
     aesCbcDecryptKeyCache,
     keyBytes,
-    () => crypto.subtle.importKey('raw', toBufferSource(keyBytes), { name: 'AES-CBC' }, false, ['decrypt'])
+    () => requireWebCrypto().subtle.importKey('raw', toBufferSource(keyBytes), { name: 'AES-CBC' }, false, ['decrypt'])
   );
 }
 
@@ -88,8 +119,9 @@ export async function pbkdf2(
 ): Promise<Uint8Array> {
   const pwdBytes = typeof passwordOrBytes === 'string' ? new TextEncoder().encode(passwordOrBytes) : passwordOrBytes;
   const saltBytes = typeof saltOrBytes === 'string' ? new TextEncoder().encode(saltOrBytes) : saltOrBytes;
-  const key = await crypto.subtle.importKey('raw', toBufferSource(pwdBytes), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits(
+  const subtle = requireWebCrypto().subtle;
+  const key = await subtle.importKey('raw', toBufferSource(pwdBytes), 'PBKDF2', false, ['deriveBits']);
+  const bits = await subtle.deriveBits(
     { name: 'PBKDF2', hash: 'SHA-256', salt: toBufferSource(saltBytes), iterations },
     key,
     keyLen * 8
@@ -99,7 +131,8 @@ export async function pbkdf2(
 
 export async function hkdfExpand(prk: Uint8Array, info: string, length: number): Promise<Uint8Array> {
   const infoBytes = new TextEncoder().encode(info || '');
-  const key = await crypto.subtle.importKey('raw', toBufferSource(prk), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const subtle = requireWebCrypto().subtle;
+  const key = await subtle.importKey('raw', toBufferSource(prk), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   const result = new Uint8Array(length);
   let previous = new Uint8Array(0);
   let offset = 0;
@@ -110,7 +143,7 @@ export async function hkdfExpand(prk: Uint8Array, info: string, length: number):
     input.set(previous, 0);
     input.set(infoBytes, previous.length);
     input[input.length - 1] = counter & 0xff;
-    previous = new Uint8Array(await crypto.subtle.sign('HMAC', key, toBufferSource(input)));
+    previous = new Uint8Array(await subtle.sign('HMAC', key, toBufferSource(input)));
     const copyLen = Math.min(previous.length, length - offset);
     result.set(previous.slice(0, copyLen), offset);
     offset += copyLen;
@@ -134,28 +167,29 @@ export async function hkdf(
     info: toBufferSource(infoBytes),
     hash: 'SHA-256',
   };
-  const key = await crypto.subtle.importKey('raw', toBufferSource(ikm), 'HKDF', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits(params, key, outputByteSize * 8);
+  const subtle = requireWebCrypto().subtle;
+  const key = await subtle.importKey('raw', toBufferSource(ikm), 'HKDF', false, ['deriveBits']);
+  const bits = await subtle.deriveBits(params, key, outputByteSize * 8);
   return new Uint8Array(bits);
 }
 
 async function hmacSha256(keyBytes: Uint8Array, dataBytes: Uint8Array): Promise<Uint8Array> {
   const key = await getHmacSha256Key(keyBytes);
-  return new Uint8Array(await crypto.subtle.sign('HMAC', key, toBufferSource(dataBytes)));
+  return new Uint8Array(await requireWebCrypto().subtle.sign('HMAC', key, toBufferSource(dataBytes)));
 }
 
 async function encryptAesCbc(data: Uint8Array, key: Uint8Array, iv: Uint8Array): Promise<Uint8Array> {
   const cryptoKey = await getAesCbcEncryptKey(key);
-  return new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-CBC', iv: toBufferSource(iv) }, cryptoKey, toBufferSource(data)));
+  return new Uint8Array(await requireWebCrypto().subtle.encrypt({ name: 'AES-CBC', iv: toBufferSource(iv) }, cryptoKey, toBufferSource(data)));
 }
 
 async function decryptAesCbc(data: Uint8Array, key: Uint8Array, iv: Uint8Array): Promise<Uint8Array> {
   const cryptoKey = await getAesCbcDecryptKey(key);
-  return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-CBC', iv: toBufferSource(iv) }, cryptoKey, toBufferSource(data)));
+  return new Uint8Array(await requireWebCrypto().subtle.decrypt({ name: 'AES-CBC', iv: toBufferSource(iv) }, cryptoKey, toBufferSource(data)));
 }
 
 export async function encryptBwFileData(data: Uint8Array, encKey: Uint8Array, macKey: Uint8Array): Promise<Uint8Array> {
-  const iv = crypto.getRandomValues(new Uint8Array(16));
+  const iv = requireWebCrypto().getRandomValues(new Uint8Array(16));
   const cipher = await encryptAesCbc(data, encKey, iv);
   const mac = await hmacSha256(macKey, concatBytes(iv, cipher));
   const out = new Uint8Array(1 + iv.length + mac.length + cipher.length);
@@ -179,7 +213,7 @@ export async function decryptBwFileData(encrypted: Uint8Array, encKey: Uint8Arra
 }
 
 export async function encryptBw(data: Uint8Array, encKey: Uint8Array, macKey: Uint8Array): Promise<string> {
-  const iv = crypto.getRandomValues(new Uint8Array(16));
+  const iv = requireWebCrypto().getRandomValues(new Uint8Array(16));
   const cipher = await encryptAesCbc(data, encKey, iv);
   const mac = await hmacSha256(macKey, concatBytes(iv, cipher));
   return `2.${bytesToBase64(iv)}|${bytesToBase64(cipher)}|${bytesToBase64(mac)}`;
@@ -556,8 +590,9 @@ export async function calcTotpNow(rawSecret: string, nowMs: number = Date.now())
     message[i] = c & 0xff;
     c = Math.floor(c / 256);
   }
-  const key = await crypto.subtle.importKey('raw', toBufferSource(keyBytes), { name: 'HMAC', hash: algorithm }, false, ['sign']);
-  const hs = new Uint8Array(await crypto.subtle.sign('HMAC', key, toBufferSource(message)));
+  const subtle = requireWebCrypto().subtle;
+  const key = await subtle.importKey('raw', toBufferSource(keyBytes), { name: 'HMAC', hash: algorithm }, false, ['sign']);
+  const hs = new Uint8Array(await subtle.sign('HMAC', key, toBufferSource(message)));
   const offset = hs[hs.length - 1] & 0x0f;
   const bin = ((hs[offset] & 0x7f) << 24) | ((hs[offset + 1] & 0xff) << 16) | ((hs[offset + 2] & 0xff) << 8) | (hs[offset + 3] & 0xff);
   let code = (bin % (10 ** digits)).toString().padStart(digits, '0');

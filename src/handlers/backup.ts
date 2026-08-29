@@ -1247,19 +1247,14 @@ export async function handleDownloadAdminBackupAttachment(request: Request, env:
   if (!isAdmin(actorUser)) return errorResponse('Forbidden', 403);
 
   try {
-    const url = new URL(request.url);
-    let input: { blobName?: unknown; masterPasswordHash?: unknown } = {};
-    if (request.method === 'POST') {
-      try {
-        input = await request.json<{ blobName?: unknown; masterPasswordHash?: unknown }>();
-      } catch {
-        return errorResponse('Backup attachment download payload is invalid', 400);
-      }
-    } else {
-      input = {
-        blobName: url.searchParams.get('blobName') || '',
-        masterPasswordHash: url.searchParams.get('masterPasswordHash') || '',
-      };
+    // Read the request body only. Accepting these fields from the query string
+    // would put the master-password authentication hash in the URL, where it is
+    // captured by request logs, browser history and Referer headers.
+    let input: { blobName?: unknown; masterPasswordHash?: unknown };
+    try {
+      input = await request.json<{ blobName?: unknown; masterPasswordHash?: unknown }>();
+    } catch {
+      return errorResponse('Backup attachment download payload is invalid', 400);
     }
 
     const verificationError = await requireBackupUserVerification(

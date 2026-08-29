@@ -13,6 +13,7 @@ import {
 } from '@/lib/api/backup';
 import {
   REMOTE_BROWSER_ITEMS_PER_PAGE,
+  REMOTE_BROWSER_REFRESH_TTL_MS,
   compareRemoteItems,
   createDraftBackupSettings,
   createDraftDestinationRecord,
@@ -217,6 +218,7 @@ export default function BackupCenterPage(props: BackupCenterPageProps) {
   const [remoteBrowserCache, setRemoteBrowserCache] = useState<Record<string, RemoteBackupBrowserResponse>>(persistedRemoteState.cache);
   const [remoteBrowserPathByDestination, setRemoteBrowserPathByDestination] = useState<Record<string, string>>(persistedRemoteState.pathByDestination);
   const [remoteBrowserPageByKey, setRemoteBrowserPageByKey] = useState<Record<string, number>>(persistedRemoteState.pageByKey);
+  const [remoteBrowserRefreshedAt, setRemoteBrowserRefreshedAt] = useState<Record<string, number>>(persistedRemoteState.refreshedAt || {});
   const [showAddChooser, setShowAddChooser] = useState(false);
 
   const visibleDestinations = getVisibleDestinations(settings);
@@ -308,8 +310,22 @@ export default function BackupCenterPage(props: BackupCenterPageProps) {
       pathByDestination: remoteBrowserPathByDestination,
       pageByKey: remoteBrowserPageByKey,
       selectedDestinationId,
+      refreshedAt: remoteBrowserRefreshedAt,
     });
-  }, [props.currentUserId, remoteBrowserCache, remoteBrowserPageByKey, remoteBrowserPathByDestination, selectedDestinationId]);
+  }, [props.currentUserId, remoteBrowserCache, remoteBrowserPageByKey, remoteBrowserPathByDestination, remoteBrowserRefreshedAt, selectedDestinationId]);
+
+  useEffect(() => {
+    if (!savedSelectedDestination) return;
+    const destinationId = savedSelectedDestination.id;
+    const path = remoteBrowserPathByDestination[destinationId] || '';
+    const cacheKey = getRemoteBrowserCacheKey(destinationId, path);
+    const lastRefreshed = remoteBrowserRefreshedAt[cacheKey] || 0;
+    const isStale = Date.now() - lastRefreshed > REMOTE_BROWSER_REFRESH_TTL_MS;
+    if (isStale) {
+      void loadRemoteBrowser(destinationId, path, { force: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedSelectedDestination?.id]);
 
   useEffect(() => {
     if (!restoreProgress) {
@@ -398,6 +414,7 @@ export default function BackupCenterPage(props: BackupCenterPageProps) {
       };
       setRemoteBrowserCache((current) => ({ ...current, [cacheKey]: nextBrowser }));
       setRemoteBrowserPageByKey((current) => ({ ...current, [cacheKey]: 1 }));
+      setRemoteBrowserRefreshedAt((current) => ({ ...current, [cacheKey]: Date.now() }));
     } catch (error) {
       const message = error instanceof Error ? error.message : t('txt_backup_remote_load_failed');
       setLocalError(message);
@@ -543,6 +560,7 @@ export default function BackupCenterPage(props: BackupCenterPageProps) {
       ).cache);
       setRemoteBrowserPathByDestination((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== destinationIdToDelete)));
       setRemoteBrowserPageByKey((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(`${destinationIdToDelete}:`))));
+      setRemoteBrowserRefreshedAt((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(`${destinationIdToDelete}:`))));
       setSelectedDestinationId(nextSelected);
       setConfirmDeleteDestinationOpen(false);
       props.onNotify('success', t('txt_backup_destination_deleted'));
@@ -670,6 +688,7 @@ export default function BackupCenterPage(props: BackupCenterPageProps) {
         setRemoteBrowserCache((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(`${destinationIdToInvalidate}:`))));
         setRemoteBrowserPathByDestination((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== destinationIdToInvalidate)));
         setRemoteBrowserPageByKey((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(`${destinationIdToInvalidate}:`))));
+        setRemoteBrowserRefreshedAt((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(`${destinationIdToInvalidate}:`))));
       }
       setSelectedDestinationId(nextSelected);
       props.onNotify('success', t('txt_backup_settings_saved'));

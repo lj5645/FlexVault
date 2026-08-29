@@ -3,6 +3,7 @@ import type { Env } from '../types';
 import {
   isBrowserExtensionOrigin,
   isConfiguredWebAuthnAllowedOrigin,
+  isOfficialBitwardenDesktopOrigin,
   normalizeOrigin,
 } from './origins';
 
@@ -48,7 +49,10 @@ function getCorsPolicy(request: Request, env: Env): { allowOrigin: string | null
   if (origin === url.origin) {
     return { allowOrigin: origin, allowCredentials: true };
   }
-  if (isBrowserExtensionOrigin(origin) && isConfiguredWebAuthnAllowedOrigin(env, origin)) {
+  if (
+    (isBrowserExtensionOrigin(origin) || isOfficialBitwardenDesktopOrigin(origin))
+    && isConfiguredWebAuthnAllowedOrigin(env, origin)
+  ) {
     return { allowOrigin: origin, allowCredentials: true };
   }
   if (isWildcardCorsPath(url.pathname)) {
@@ -100,10 +104,22 @@ export function applyCors(
     headers.set(k, v);
   }
   // Security headers applied to every response.
-  headers.set('X-Frame-Options', 'DENY');
   headers.set('X-Content-Type-Options', 'nosniff');
   headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-  if (!headers.has('Content-Security-Policy')) {
+  const isWebAuthnFrameConnector = new URL(request.url).pathname === '/webauthn-connector.html';
+  if (isWebAuthnFrameConnector) {
+    // Official desktop and browser clients render this exact endpoint inside a
+    // 40px cross-origin iframe. The connector validates its parent before any
+    // WebAuthn request or postMessage, so only this protocol page may be framed.
+    headers.delete('X-Frame-Options');
+    headers.set(
+      'Content-Security-Policy',
+      "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'"
+    );
+  } else {
+    headers.set('X-Frame-Options', 'DENY');
+  }
+  if (!isWebAuthnFrameConnector && !headers.has('Content-Security-Policy')) {
     headers.set('Content-Security-Policy', "frame-ancestors 'none'; img-src 'self' data:");
   }
   return new Response(response.body, {

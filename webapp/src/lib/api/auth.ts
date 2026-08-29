@@ -1,4 +1,12 @@
-import { bytesToBase64, decryptBw, encryptBw, hkdfExpand, pbkdf2 } from '../crypto';
+import {
+  bytesToBase64,
+  decryptBw,
+  encryptBw,
+  hkdfExpand,
+  pbkdf2,
+  requireWebCrypto,
+  WebCryptoUnavailableError,
+} from '../crypto';
 import { t, translateServerError } from '../i18n';
 import type { AuthorizedDevice } from '../types';
 import type {
@@ -428,14 +436,15 @@ export async function registerAccount(args: {
 }): Promise<{ ok: true } | { ok: false; message: string }> {
   try {
     const { email, name, password, masterPasswordHint, inviteCode, fallbackIterations } = args;
+    const webCrypto = requireWebCrypto();
     const masterKey = await pbkdf2(password, email, fallbackIterations, 32);
     const masterHash = await pbkdf2(masterKey, password, 1, 32);
     const encKey = await hkdfExpand(masterKey, 'enc', 32);
     const macKey = await hkdfExpand(masterKey, 'mac', 32);
-    const sym = crypto.getRandomValues(new Uint8Array(64));
+    const sym = webCrypto.getRandomValues(new Uint8Array(64));
     const encryptedVaultKey = await encryptBw(sym, encKey, macKey);
 
-    const keyPair = await crypto.subtle.generateKey(
+    const keyPair = await webCrypto.subtle.generateKey(
       {
         name: 'RSA-OAEP',
         modulusLength: 2048,
@@ -445,8 +454,8 @@ export async function registerAccount(args: {
       true,
       ['encrypt', 'decrypt']
     );
-    const publicKey = new Uint8Array(await crypto.subtle.exportKey('spki', keyPair.publicKey));
-    const privateKey = new Uint8Array(await crypto.subtle.exportKey('pkcs8', keyPair.privateKey));
+    const publicKey = new Uint8Array(await webCrypto.subtle.exportKey('spki', keyPair.publicKey));
+    const privateKey = new Uint8Array(await webCrypto.subtle.exportKey('pkcs8', keyPair.privateKey));
     const encryptedPrivateKey = await encryptBw(privateKey, sym.slice(0, 32), sym.slice(32, 64));
 
     const resp = await fetch('/api/accounts/register', {
@@ -474,6 +483,9 @@ export async function registerAccount(args: {
     }
     return { ok: true };
   } catch (error) {
+    if (error instanceof WebCryptoUnavailableError) {
+      return { ok: false, message: t('txt_web_crypto_unavailable') };
+    }
     return { ok: false, message: error instanceof Error ? translateServerError(error.message, error.message) : t('txt_register_failed') };
   }
 }
@@ -631,8 +643,6 @@ export async function changeMasterPassword(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       masterPasswordHash: current.hash,
-      newMasterPasswordHash,
-      key: newKey,
       authenticationData: {
         kdf: {
           kdfType: 0,
@@ -653,8 +663,6 @@ export async function changeMasterPassword(
         masterKeyWrappedUserKey: newKey,
         salt: args.email.trim().toLowerCase(),
       },
-      kdf: 0,
-      kdfIterations: current.kdfIterations,
     }),
   });
   if (!resp.ok) throw new Error('Change master password failed');
@@ -687,6 +695,7 @@ function normalizeYubiKeySettings(raw: any): YubiKeyOtpSettings {
     ],
     nfc: !!(raw?.nfc ?? raw?.Nfc),
     yubicoConfigured: !!(raw?.yubicoConfigured ?? raw?.YubicoConfigured),
+    yubicoCanManage: !!(raw?.yubicoCanManage ?? raw?.YubicoCanManage),
     yubicoClientId: String(raw?.yubicoClientId ?? raw?.YubicoClientId ?? ''),
     yubicoSecretKey: String(raw?.yubicoSecretKey ?? raw?.YubicoSecretKey ?? ''),
   };

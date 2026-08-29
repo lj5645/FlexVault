@@ -209,10 +209,15 @@ export class StorageService {
     return REQUIRED_SCHEMA_TABLES.every((table) => found.has(table));
   }
 
-  private sqlChunkSize(fixedBindCount: number): number {
+  private sqlChunkSize(fixedBindCount: number, bindCountPerItem = 1): number {
+    const safeFixedBindCount = Math.max(0, Math.floor(fixedBindCount));
+    const safeBindCountPerItem = Math.max(1, Math.floor(bindCountPerItem));
     return Math.max(
       1,
-      Math.min(LIMITS.performance.bulkMoveChunkSize, StorageService.MAX_D1_SQL_VARIABLES - fixedBindCount)
+      Math.min(
+        LIMITS.performance.bulkMoveChunkSize,
+        Math.floor((StorageService.MAX_D1_SQL_VARIABLES - safeFixedBindCount) / safeBindCountPerItem)
+      )
     );
   }
 
