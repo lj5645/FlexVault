@@ -203,6 +203,12 @@ export async function startServer(): Promise<void> {
 
   const shutdown = async () => {
     console.log('\nShutting down...');
+    // Close the database connection before stopping the server.
+    try {
+      env.DB.close();
+    } catch {
+      // Ignore close errors during shutdown
+    }
     // Gracefully close the HTTP server: stop accepting new connections and
     // wait for in-flight requests to finish. Force-exit after 10s timeout
     // to avoid hanging on stuck connections.

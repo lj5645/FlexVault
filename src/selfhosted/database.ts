@@ -94,6 +94,12 @@ export class SQLiteD1Adapter {
     this.db = createClient({
       url: `file:${dbPath}`,
     });
+
+    // Enable WAL mode for better concurrency (readers don't block writers)
+    // and set a 5-second busy timeout so concurrent writes wait instead of
+    // immediately throwing SQLITE_BUSY errors.
+    this.db.execute('PRAGMA journal_mode = WAL').catch(() => undefined);
+    this.db.execute('PRAGMA busy_timeout = 5000').catch(() => undefined);
   }
 
   prepare(sql: string): D1PreparedStatement {
@@ -142,7 +148,11 @@ export class SQLiteD1Adapter {
   }
 
   close(): void {
-    // libsql client doesn't have explicit close
+    try {
+      this.db.close();
+    } catch {
+      // Ignore close errors during shutdown
+    }
   }
 
   getRawDb(): Client {

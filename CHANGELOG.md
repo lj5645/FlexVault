@@ -45,6 +45,10 @@
 - 修复 `SelfHostedEnv` 缺少 `HIDE_WEB_VAULT` 字段导致 `isWebVaultHidden()` 永远返回 false 的问题，现在自托管模式支持通过环境变量 `HIDE_WEB_VAULT=1` 隐藏 Web Vault
 - 修复 `NotificationsHubStub` 缺少 `/internal/auth-request-response` 端点导致 `notifyAuthRequestResponse()` 收到 404 并打印错误日志的问题，返回 204 静默跳过（自托管模式不支持 anonymous-auth-request WebSocket 连接）
 - 清理 `SelfHostedEnv` 中上游 `Env` 接口不存在的多余字段：`TOTP_SECRET`、`YUBICO_CLIENT_ID`、`YUBICO_SECRET_KEY`、`globalSettings__yubico__clientId`、`globalSettings__yubico__key`（Yubico clientId/key 从数据库 `app_config` 表读取，TOTP secret 是每用户字段存在数据库中，均非环境变量）
+- 修复 `SQLiteD1Adapter` 缺少 `busy_timeout` 配置导致并发写入时抛出 `SQLITE_BUSY` 错误的问题，设置 5 秒等待超时
+- 修复 `SQLiteD1Adapter` 未显式启用 WAL 模式的问题，WAL 模式允许并发读取不阻塞写入
+- 修复 `SQLiteD1Adapter.close()` 方法未调用 `this.db.close()` 的问题，之前只返回 undefined，现在正确关闭数据库连接
+- 修复 `index.ts` 的 shutdown 流程未关闭数据库连接的问题，现在在关闭 HTTP 服务器前先关闭数据库
 
 ## [1.7.4] - 2026-07-13
 
