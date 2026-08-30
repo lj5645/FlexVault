@@ -7,6 +7,29 @@
 ## [Unreleased]
 
 ### 新增
+- 同步上游 NodeWarden v1.8.0（对应 Bitwarden Server 2026.6.0）
+- 自托管 `NotificationsHubStub` 新增 `/internal/ws-token` 与 `/internal/ws-token/consume` 内部端点，对齐上游 WebSocket 连接令牌签发/消费安全机制
+- 自托管 WebSocket 升级流程支持 `?id=<connectionToken>` 一次性令牌认证，同时保留 `?access_token=` 旧方式向后兼容
+
+### 变更
+- 更新 `src/selfhosted/websocket.ts`，`NotificationsHubServer` 新增 `wsConnectionTokens` 存储与 `storeWsConnectionToken` / `consumeWsConnectionToken` 方法，承载上游 Durable Object 的令牌存储职责
+
+### 修复
+- 修复自托管模式下 `/notifications/hub/negotiate` 返回 500 的问题（上游新增 WebSocket 连接令牌机制后，`NotificationsHubStub` 未实现 `/internal/ws-token` 端点导致 `issueWebSocketConnectionToken` 抛错）
+
+### 同步上游 v1.7.4 → v1.8.0 主要功能
+- WebSocket 连接令牌（一次性、签名、60 秒 TTL），替代原来直接在 URL 携带 access JWT 的方式
+- SSH Key 生成器
+- WebAuthn 移动端 Connector 与桌面端 Connector（`/webauthn-connector.html`、`/webauthn-mobile-connector.html`）
+- Yubico OTP 服务端配置（`src/services/yubico-config.ts`）
+- Cipher 全量更新时清空被省略的可空字段（修复陈旧加密 notes 被回滚的问题）
+- Config 响应独立模块（`src/config-response.ts`）
+- Web Vault 可见性控制（`src/web-vault-visibility.ts`）
+- 新增多个测试脚本（config-compatibility、notifications-security、web-crypto-availability、webauthn-connector 等）
+
+## [1.7.4] - 2026-XX-XX
+
+### 新增
 - 同步上游 NodeWarden v1.7.4（对应 Bitwarden Server 2026.4.1）
 - 新增 `BackupTransferRunnerStub`，在自托管模式下作为 Cloudflare Durable Object `BACKUP_TRANSFER_RUNNER` 的占位实现
 - 新增 `cloudflare:workers` 模块的 Node.js ESM Loader，使上游代码无需改动即可在 Node.js 中运行

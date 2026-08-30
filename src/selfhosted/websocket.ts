@@ -31,10 +31,25 @@ function extractAccessToken(req: http.IncomingMessage): string | null {
   return match?.[1]?.trim() || null;
 }
 
+function extractWsConnectionToken(req: http.IncomingMessage): string | null {
+  const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+  return String(url.searchParams.get('id') || '').trim() || null;
+}
+
+interface WsConnectionTokenEntry {
+  userId: string;
+  deviceIdentifier: string | null;
+  expiresAt: number;
+}
+
 export class NotificationsHubServer {
   private wss: WebSocketServer;
   private users: Map<string, HubUser> = new Map();
   private jwtSecret: string;
+  // Short-lived websocket connection tokens (issued by /notifications/hub/negotiate,
+  // consumed on ws upgrade). Mirrors the upstream Durable Object storage so the
+  // self-hosted hub keeps the same signed-token security model as Cloudflare Workers.
+  private wsConnectionTokens: Map<string, WsConnectionTokenEntry> = new Map();
 
   constructor(server: http.Server, jwtSecret: string, path: string = '/notifications/hub') {
     this.jwtSecret = jwtSecret;
@@ -42,29 +57,60 @@ export class NotificationsHubServer {
     this.setupWebSocket();
   }
 
+  storeWsConnectionToken(token: string, entry: WsConnectionTokenEntry): void {
+    this.wsConnectionTokens.set(token, entry);
+    // Lazy cleanup of expired tokens
+    if (this.wsConnectionTokens.size > 1000) {
+      const now = Date.now();
+      for (const [key, value] of this.wsConnectionTokens) {
+        if (value.expiresAt < now) this.wsConnectionTokens.delete(key);
+      }
+    }
+  }
+
+  consumeWsConnectionToken(token: string): WsConnectionTokenEntry | null {
+    const entry = this.wsConnectionTokens.get(token);
+    if (!entry) return null;
+    // Single-use: remove once consumed
+    this.wsConnectionTokens.delete(token);
+    if (entry.expiresAt < Date.now()) return null;
+    return entry;
+  }
+
   private setupWebSocket(): void {
     this.wss.on('connection', async (ws: WebSocket, req) => {
-      const accessToken = extractAccessToken(req);
-      
-      if (!accessToken) {
-        ws.close(1008, 'Unauthorized');
-        return;
-      }
-
       let userId: string;
       let deviceIdentifier: string | null = null;
 
-      try {
-        const payload = await verifyJWT(accessToken, this.jwtSecret);
-        if (!payload?.sub) {
+      // Primary auth path: one-time ws connection token issued by /notifications/hub/negotiate
+      const wsToken = extractWsConnectionToken(req);
+      if (wsToken) {
+        const entry = this.consumeWsConnectionToken(wsToken);
+        if (!entry) {
           ws.close(1008, 'Unauthorized');
           return;
         }
-        userId = payload.sub;
-        deviceIdentifier = payload.did || null;
-      } catch {
-        ws.close(1008, 'Unauthorized');
-        return;
+        userId = entry.userId;
+        deviceIdentifier = entry.deviceIdentifier;
+      } else {
+        // Legacy path: raw access JWT in query or Authorization header
+        const accessToken = extractAccessToken(req);
+        if (!accessToken) {
+          ws.close(1008, 'Unauthorized');
+          return;
+        }
+        try {
+          const payload = await verifyJWT(accessToken, this.jwtSecret);
+          if (!payload?.sub) {
+            ws.close(1008, 'Unauthorized');
+            return;
+          }
+          userId = payload.sub;
+          deviceIdentifier = payload.did || null;
+        } catch {
+          ws.close(1008, 'Unauthorized');
+          return;
+        }
       }
 
       const attachment: WsAttachment = {
@@ -305,6 +351,32 @@ export class NotificationsHubStub {
   async fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     const url = typeof input === 'string' ? new URL(input, 'http://localhost') : new URL(input.toString());
     const pathname = url.pathname;
+
+    // Negotiate flow: store a short-lived ws connection token (single-use)
+    if (pathname === '/internal/ws-token' || pathname === 'https://notifications/internal/ws-token') {
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      const token = String(body.token || '').trim();
+      if (!token) return new Response('token is required', { status: 400 });
+      this.server.storeWsConnectionToken(token, {
+        userId: String(body.userId || this.userId),
+        deviceIdentifier: body.deviceIdentifier ?? null,
+        expiresAt: Number(body.expiresAt || (Date.now() + 60_000)),
+      });
+      return new Response(null, { status: 204 });
+    }
+
+    // Ws upgrade flow: consume the one-time token and return the bound connection
+    if (pathname === '/internal/ws-token/consume' || pathname === 'https://notifications/internal/ws-token/consume') {
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      const token = String(body.token || '').trim();
+      if (!token) return new Response('token is required', { status: 400 });
+      const entry = this.server.consumeWsConnectionToken(token);
+      if (!entry) return new Response('token not found or expired', { status: 404 });
+      return new Response(JSON.stringify({ userId: entry.userId, deviceIdentifier: entry.deviceIdentifier ?? null }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
 
     if (pathname === '/internal/notify' || pathname === 'https://notifications/internal/notify') {
       const body = init?.body ? JSON.parse(init.body as string) : {};
