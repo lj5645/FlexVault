@@ -401,6 +401,14 @@ export class NotificationsHubStub {
       });
     }
 
+    // Auth request response broadcast. Self-hosted mode does not support
+    // anonymous-auth-request WebSocket connections, so there are no sockets to
+    // broadcast to. Return 204 so the caller (notifyAuthRequestResponse) does
+    // not log an error.
+    if (pathname === '/internal/auth-request-response' || pathname === 'https://notifications/internal/auth-request-response') {
+      return new Response(null, { status: 204 });
+    }
+
     return new Response('Not found', { status: 404 });
   }
 }

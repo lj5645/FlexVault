@@ -23,6 +23,11 @@
 - 修复 `startServer()` 的 shutdown 流程未 `await server.close()` 直接 `process.exit(0)` 导致在途请求被强制中断的问题，改为优雅关闭并加 10 秒超时兜底
 - 修复 `NotificationsHubServer.storeWsConnectionToken()` 仅在 token 数量超过 1000 时才清理过期条目的问题，改为基于时间间隔（每 60 秒最多一次）的主动清理
 - 修复 `cache-polyfill.ts` 的 `Cache.put()` 方法缺少 `return` 语句的问题（虽不影响功能，但不符合 Cache API 规范）
+- 修复 `SelfHostedEnv` 缺少 `HIDE_WEB_VAULT` 字段导致 `isWebVaultHidden()` 永远返回 false 的问题，现在自托管模式支持通过环境变量 `HIDE_WEB_VAULT=1` 隐藏 Web Vault
+- 修复 `NotificationsHubStub` 缺少 `/internal/auth-request-response` 端点导致 `notifyAuthRequestResponse()` 收到 404 并打印错误日志的问题，返回 204 静默跳过（自托管模式不支持 anonymous-auth-request WebSocket 连接）
+
+### 变更（补充）
+- 清理 `SelfHostedEnv` 中上游 `Env` 接口不存在的多余字段：`TOTP_SECRET`、`YUBICO_CLIENT_ID`、`YUBICO_SECRET_KEY`、`globalSettings__yubico__clientId`、`globalSettings__yubico__key`（Yubico clientId/key 从数据库 `app_config` 表读取，TOTO secret 是每用户字段存在数据库中，均非环境变量）
 
 ### 同步上游 v1.7.4 → v1.8.0 主要功能
 - WebSocket 连接令牌（一次性、签名、60 秒 TTL），替代原来直接在 URL 携带 access JWT 的方式

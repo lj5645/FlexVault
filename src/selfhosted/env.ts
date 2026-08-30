@@ -13,16 +13,12 @@ export interface SelfHostedEnv {
   NOTIFICATIONS_HUB: NotificationsHubNamespace;
   BACKUP_TRANSFER_RUNNER: BackupTransferRunnerStub;
   JWT_SECRET: string;
-  TOTP_SECRET?: string;
   WEBAUTHN_RP_ID?: string;
   WEBAUTHN_RP_NAME?: string;
   WEBAUTHN_ALLOWED_ORIGINS?: string;
-  YUBICO_CLIENT_ID?: string;
-  YUBICO_SECRET_KEY?: string;
   YUBICO_VALIDATION_URLS?: string;
-  'globalSettings__yubico__clientId'?: string;
-  'globalSettings__yubico__key'?: string;
   'globalSettings__yubico__validationUrls'?: string;
+  HIDE_WEB_VAULT?: string;
   ASSETS?: {
     fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   };
@@ -30,7 +26,6 @@ export interface SelfHostedEnv {
 
 export interface AppConfig {
   jwtSecret: string;
-  totpSecret?: string;
   databasePath: string;
   storagePath: string;
   port: number;
@@ -66,7 +61,7 @@ export function createEnv(config: AppConfig): SelfHostedEnv {
     NOTIFICATIONS_HUB: null as any,
     BACKUP_TRANSFER_RUNNER: new BackupTransferRunnerStub(),
     JWT_SECRET: config.jwtSecret,
-    TOTP_SECRET: config.totpSecret,
+    HIDE_WEB_VAULT: process.env.HIDE_WEB_VAULT,
   };
 
   return env;
@@ -92,7 +87,6 @@ export function loadConfigFromEnv(): AppConfig {
 
   return {
     jwtSecret,
-    totpSecret: process.env.TOTP_SECRET,
     databasePath: process.env.DATABASE_PATH || DEFAULT_CONFIG.databasePath,
     storagePath: process.env.STORAGE_PATH || DEFAULT_CONFIG.storagePath,
     port: parseInt(process.env.PORT || '', 10) || DEFAULT_CONFIG.port,
