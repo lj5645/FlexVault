@@ -423,6 +423,7 @@ export interface YubiKeyOtpSettings {
   keys: [string, string, string, string, string];
   nfc: boolean;
   yubicoConfigured: boolean;
+  yubicoCanManage: boolean;
   yubicoClientId: string;
   yubicoSecretKey: string;
 }

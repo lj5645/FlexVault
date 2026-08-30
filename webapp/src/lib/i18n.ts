@@ -238,6 +238,7 @@ export function translateServerError(message: string | null | undefined, fallbac
     'WebDAV server URL is required': 'txt_backup_error_webdav_url_required',
     'WebDAV server URL must start with http:// or https://': 'txt_backup_error_webdav_url_protocol',
     'WebDAV username is required': 'txt_backup_error_webdav_username_required',
+    'Secure browser cryptography is unavailable. Open NodeWarden over HTTPS in a supported browser.': 'txt_web_crypto_unavailable',
     'masterPasswordHash is required': 'txt_server_error_master_password_hash_required',
     'masterPasswordHash or userVerificationToken is required': 'txt_server_error_master_password_or_verification_required',
   }[normalized];

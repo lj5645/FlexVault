@@ -369,7 +369,7 @@
 .not-found-code {
   @apply rounded-full px-3 py-1 text-sm font-extrabold;
   background: #eef4ff;
-  color: #1d4ed8;
+  color: var(--primary-hover);
 }
 
 .not-found-copy {
@@ -574,7 +574,7 @@
 
 .jwt-inline-link {
   @apply font-bold no-underline;
-  color: #1d4ed8;
+  color: var(--primary-hover);
 }
 
 .jwt-inline-link:hover {
@@ -613,7 +613,7 @@
 
 .standalone-footer a {
   @apply font-bold no-underline;
-  color: #1d4ed8;
+  color: var(--primary-hover);
 }
 
 .standalone-footer a:hover {
@@ -622,5 +622,5 @@
 
 .standalone-version {
   @apply font-bold;
-  color: #1d4ed8;
+  color: var(--primary-hover);
 }

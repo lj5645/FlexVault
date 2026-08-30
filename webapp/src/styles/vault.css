@@ -47,7 +47,7 @@
 }
 
 .folder-add-btn:hover {
-  color: #1d4ed8;
+  color: var(--primary-hover);
 }
 
 .search-input {
@@ -161,7 +161,7 @@
 }
 
 .folder-sort-btn:hover {
-  color: #1d4ed8;
+  color: var(--primary-hover);
   background: #dbeafe;
   transform: scale(1.06);
 }
@@ -230,7 +230,7 @@ select.input.duplicate-mode-toolbar-select {
 }
 
 .list-head {
-  @apply mb-1.5 flex items-center gap-2;
+  @apply mb-1.5 flex flex-wrap items-center gap-2;
   min-height: 34px;
 }
 
@@ -860,7 +860,9 @@ select.input.duplicate-mode-toolbar-select {
 
 .kv-row {
   @apply grid items-center gap-2.5 py-2.5;
-  grid-template-columns: minmax(0px, 80px) minmax(0, 1fr) auto;
+  /* Floor the value column so the auto-sized actions column wraps its
+     buttons instead of collapsing the value to 0 width. */
+  grid-template-columns: minmax(0px, 80px) minmax(min(35%, 140px), 1fr) auto;
   border-bottom: 1px solid rgba(154, 172, 205, 0.22);
 }
 
@@ -962,7 +964,7 @@ select.input.duplicate-mode-toolbar-select {
 }
 
 .totp-ring-progress {
-  stroke: #2563eb;
+  stroke: var(--primary);
   stroke-linecap: round;
   transition: stroke-dashoffset 260ms linear, stroke 200ms ease;
 }
