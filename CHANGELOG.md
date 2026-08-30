@@ -87,10 +87,12 @@
 ### Docker 修复（2026-07-13 08:40, commit `89fe9b9`）
 - 修复 `package-lock.json` 在 Docker 容器内（npm 10.9.8）仍报 missing 包的问题，使用 npm 10.9.8 重新生成 lock 文件以确保与 Docker 环境完全一致
 
-## [1.7.1] - 2025-XX-XX
+## [1.7.1] - 2026-06-26
 
-### 同步上游
-- 同步 NodeWarden v1.7.1 全部功能（详见上游提交历史）
+> 对应 commit: `c154565`(2026-06-26 00:08 合并上游) → `18bbc70`(2026-06-26 00:27 适配自托管) → `27f4a19`(2026-06-26 00:46 创建 CHANGELOG)
+
+### 同步上游（2026-06-26 00:08, commit `c154565`）
+- Merge remote-tracking branch 'upstream/main'，同步 NodeWarden v1.7.1 全部功能（对应 Bitwarden Server 2026.4.1）
 - 主要新功能：
   - SSH Key 支持与指纹规范化
   - Import / Export（Bitwarden JSON / 加密 JSON / ZIP / NodeWarden JSON）
@@ -101,13 +103,48 @@
   - 公开 Send（文本 / 文件）
   - 设备管理与登录通知
 
-### 自托管
-- 保留并适配 self-hosted 部署能力，所有核心 API（注册、登录、同步、附件、WebSocket）均测试通过
+### 自托管适配（2026-06-26 00:27, commit `18bbc70`）
+- 同步上游 v1.7.1 后适配自托管模式，所有核心 API（注册、登录、同步、附件、WebSocket）均测试通过
+- 新增 `src/selfhosted/backup-transfer-stub.ts`（31 行），`BackupTransferRunnerStub` 作为 Cloudflare Durable Object `BACKUP_TRANSFER_RUNNER` 的占位实现
+- 新增 `src/selfhosted/cloudflare-workers-loader.mjs`（15 行），Node.js ESM Loader，使上游代码无需改动即可在 Node.js 中 import `cloudflare:workers` 模块
+- 新增 `src/selfhosted/cloudflare-workers-stub.mjs`（12 行），提供 `DurableObject` 基类与 `waitUntil` 的空实现
+- 更新 `Dockerfile.selfhosted`，启动命令增加 `--loader src/selfhosted/cloudflare-workers-loader.mjs` 参数
+- 更新 `package.json`，补充自托管模式依赖
 
-## [1.4.x] - 早期版本
+### 文档（2026-06-26 00:46, commit `27f4a19`）
+- 创建 `CHANGELOG.md`，开始记录项目所有变更
 
-- 完成 Cloudflare Workers → Node.js 自托管适配
-- 实现 SQLite D1 适配器
-- 实现文件系统 R2 适配器
-- 实现 WebSocket 通知服务（替代 Durable Object）
-- 添加 Docker 构建与 GitHub Actions 推送至阿里云 ACR 流程
+## [1.4.1] - 2026-04-27
+
+> 对应 commit: `f63c1be`
+
+### 新增（2026-04-27 07:47, commit `f63c1be`）
+- 新增 `.github/workflows/docker.yml`（52 行），手动触发的 GitHub Actions 工作流，支持 `linux/amd64` 和 `linux/arm64` 双平台 Docker 镜像构建并推送到阿里云 ACR（`registry.cn-guangzhou.aliyuncs.com/myskyts`）
+- 更新 `README.md` 和 `README_EN.md`，添加阿里云镜像拉取说明
+
+## [1.4.0] - 2026-04-02
+
+> 对应 commit: `3d3ef87`
+
+### 新增（2026-04-02 06:47, commit `3d3ef87`）
+- **完成 Cloudflare Workers → Node.js 自托管适配**，支持 Cloudflare Workers 和 Node.js 双部署模式
+- 新增 `src/selfhosted/` 目录，包含 8 个核心适配文件：
+  - `src/selfhosted/database.ts`（159 行）— SQLite D1 适配器，基于 `@libsql/client`，实现 D1 兼容 API（`prepare`、`batch`、`dump`、`exec`）
+  - `src/selfhosted/storage.ts`（375 行）— 文件系统 R2 适配器，实现 R2 兼容 API（`put`、`get`、`delete`、`list`、`head`），支持路径遍历防护
+  - `src/selfhosted/websocket.ts`（341 行）— WebSocket 通知服务，替代 Cloudflare Durable Object，实现 SignalR 协议兼容的消息广播
+  - `src/selfhosted/cache-polyfill.ts`（45 行）— `caches.default` 与 `caches.open` 的 Node.js polyfill，实现 Cache API（`match`、`put`、`delete`）
+  - `src/selfhosted/env.ts`（162 行）— 环境变量配置加载器，`SelfHostedEnv` 接口与 `createEnv()` 工厂函数
+  - `src/selfhosted/index.ts`（222 行）— HTTP 服务器入口，`http.createServer` + 路由分发 + 静态资源服务
+  - `src/selfhosted/types.ts`（18 行）— 自托管专用类型定义
+  - `src/selfhosted/global-types.d.ts`（11 行）— 全局类型声明
+- 新增 `Dockerfile.selfhosted`（35 行），基于 `node:20-alpine`（后升级为 `node:22-alpine`）的 Docker 镜像配置
+- 新增 `docker-compose.selfhosted.yml`（28 行），Docker Compose 编排配置
+- 新增 `.env.selfhosted.example`（23 行），环境变量示例文件
+- 新增 `tsconfig.selfhosted.json`（29 行），TypeScript 编译配置
+- 新增 `selfhosted.package.json`（36 行），自托管独立包配置
+- 新增 `start-selfhosted.bat`（24 行）和 `start-selfhosted.sh`（21 行），Windows/Linux 启动脚本
+- 新增 `migrations/0001_init.sql`（217 行），初始数据库迁移脚本（SQLite 方言）
+- 新增 `.github/workflows/security.yml`（142 行）和 `.github/scripts/security.cjs`（467 行），安全扫描工作流
+- 新增 `.github/workflows/sync-upstream.yml`（34 行），上游同步工作流
+- 新增 `README.md`（499 行）和 `README_EN.md`（140 行），项目文档
+- 新增 `LICENSE`（162 行），MIT 许可证
