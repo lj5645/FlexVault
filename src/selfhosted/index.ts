@@ -203,7 +203,13 @@ export async function startServer(): Promise<void> {
 
   const shutdown = async () => {
     console.log('\nShutting down...');
-    server.close();
+    // Gracefully close the HTTP server: stop accepting new connections and
+    // wait for in-flight requests to finish. Force-exit after 10s timeout
+    // to avoid hanging on stuck connections.
+    await Promise.race([
+      new Promise<void>((resolve) => server.close(() => resolve())),
+      new Promise<void>((resolve) => setTimeout(() => resolve(), 10000)),
+    ]);
     process.exit(0);
   };
 

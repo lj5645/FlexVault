@@ -29,8 +29,8 @@ function rowToObject(row: Row): Record<string, unknown> {
 
 class PreparedStatement implements D1PreparedStatement {
   private db: Client;
-  private sql: string;
-  private values: unknown[];
+  readonly sql: string;
+  readonly values: unknown[];
 
   constructor(db: Client, sql: string, values: unknown[] = []) {
     this.db = db;
@@ -101,20 +101,22 @@ export class SQLiteD1Adapter {
   }
 
   async dump(): Promise<ArrayBuffer> {
-    const result = await this.db.execute('SELECT * FROM sqlite_master');
-    const lines: string[] = [];
-    for (const row of result.rows) {
-      lines.push(JSON.stringify(row));
-    }
-    return new TextEncoder().encode(lines.join('\n')).buffer as ArrayBuffer;
+    // Return the raw SQLite database file bytes.
+    // Note: if the database is in WAL mode and actively being written, the dump
+    // may not include the latest WAL changes. For consistent snapshots, use the
+    // backup-archive service which uses SQL-level export instead.
+    const buffer = await fs.promises.readFile(this.dbPath);
+    return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
   }
 
   async batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
     const stmts = statements.map((stmt) => {
-      const ps = stmt as PreparedStatement;
+      if (!(stmt instanceof PreparedStatement)) {
+        throw new Error('batch: statement must be created via prepare()');
+      }
       return {
-        sql: (ps as any)['sql'] as string,
-        args: (ps as any)['values'] as any[],
+        sql: stmt.sql,
+        args: stmt.values as any[],
       };
     });
 

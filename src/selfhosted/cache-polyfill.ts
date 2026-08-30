@@ -22,6 +22,7 @@ function createCacheInterface(cache: CacheMap): Cache {
         response: response.clone(),
         expiry: Date.now() + maxAge * 1000,
       });
+      return;
     },
     delete: async (request: RequestInfo | URL) => {
       const key = typeof request === 'string' ? request : (request instanceof URL ? request.toString() : request.url);

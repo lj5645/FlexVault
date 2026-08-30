@@ -164,7 +164,11 @@ export class FileSystemR2Adapter {
 
   private validatePath(filePath: string): boolean {
     const normalized = path.resolve(filePath);
-    return normalized.startsWith(this.basePath);
+    // Ensure the resolved path is inside basePath (not a sibling like basePath-evil).
+    // Using basePath + path.sep prevents /app/data/attachments-evil from matching
+    // when basePath is /app/data/attachments.
+    if (normalized === this.basePath) return true;
+    return normalized.startsWith(this.basePath + path.sep);
   }
 
   async put(

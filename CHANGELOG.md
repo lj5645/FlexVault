@@ -16,6 +16,13 @@
 
 ### 修复
 - 修复自托管模式下 `/notifications/hub/negotiate` 返回 500 的问题（上游新增 WebSocket 连接令牌机制后，`NotificationsHubStub` 未实现 `/internal/ws-token` 端点导致 `issueWebSocketConnectionToken` 抛错）
+- 修复 `cloudflare-workers-loader.mjs` 硬编码绝对路径 `file:///d:/Exp/nodewarden/...` 导致 Docker 容器内运行时找不到 stub 文件的问题，改用 `import.meta.url` 相对解析
+- 修复 `SQLiteD1Adapter.dump()` 返回 JSON 文本而非 SQLite 二进制数据库内容的问题，改为直接读取数据库文件
+- 修复 `FileSystemR2Adapter.validatePath()` 路径前缀边界问题（`/app/data/attachments-evil` 会被 `startsWith('/app/data/attachments')` 误判为合法），改为 `startsWith(basePath + path.sep)`
+- 修复 `SQLiteD1Adapter.batch()` 用 `(ps as any)['sql']` 绕过 private 访问私有字段的问题，将 `sql`/`values` 改为 readonly 公开字段并增加 `instanceof` 类型检查
+- 修复 `startServer()` 的 shutdown 流程未 `await server.close()` 直接 `process.exit(0)` 导致在途请求被强制中断的问题，改为优雅关闭并加 10 秒超时兜底
+- 修复 `NotificationsHubServer.storeWsConnectionToken()` 仅在 token 数量超过 1000 时才清理过期条目的问题，改为基于时间间隔（每 60 秒最多一次）的主动清理
+- 修复 `cache-polyfill.ts` 的 `Cache.put()` 方法缺少 `return` 语句的问题（虽不影响功能，但不符合 Cache API 规范）
 
 ### 同步上游 v1.7.4 → v1.8.0 主要功能
 - WebSocket 连接令牌（一次性、签名、60 秒 TTL），替代原来直接在 URL 携带 access JWT 的方式

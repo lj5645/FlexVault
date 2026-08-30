@@ -50,6 +50,7 @@ export class NotificationsHubServer {
   // consumed on ws upgrade). Mirrors the upstream Durable Object storage so the
   // self-hosted hub keeps the same signed-token security model as Cloudflare Workers.
   private wsConnectionTokens: Map<string, WsConnectionTokenEntry> = new Map();
+  private wsTokenLastCleanupAt: number = 0;
 
   constructor(server: http.Server, jwtSecret: string, path: string = '/notifications/hub') {
     this.jwtSecret = jwtSecret;
@@ -59,9 +60,11 @@ export class NotificationsHubServer {
 
   storeWsConnectionToken(token: string, entry: WsConnectionTokenEntry): void {
     this.wsConnectionTokens.set(token, entry);
-    // Lazy cleanup of expired tokens
-    if (this.wsConnectionTokens.size > 1000) {
-      const now = Date.now();
+    // Cleanup expired tokens at most once per minute (time-based, not size-based,
+    // so expired tokens don't accumulate even under low traffic).
+    const now = Date.now();
+    if (now - this.wsTokenLastCleanupAt > 60_000) {
+      this.wsTokenLastCleanupAt = now;
       for (const [key, value] of this.wsConnectionTokens) {
         if (value.expiresAt < now) this.wsConnectionTokens.delete(key);
       }
