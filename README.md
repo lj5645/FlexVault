@@ -1,125 +1,129 @@
-<p align="center">
-  <img src="./NodeWarden.svg" alt="NodeWarden Logo" />
-</p>
+# FlexVault
 
-<p align="center">
-  Bitwarden-compatible server running on Cloudflare Workers
-</p>
+Bitwarden-compatible self-hosted password manager. Fork of [NodeWarden](https://github.com/shuaiplus/nodewarden) with added Node.js / Docker self-hosted deployment support, while keeping full Cloudflare Workers compatibility.
 
-<p align="center">
-  <a href="https://workers.cloudflare.com/"><img src="https://img.shields.io/badge/Powered%20by-Cloudflare-F38020?logo=cloudflare&logoColor=white" alt="Powered by Cloudflare" /></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-LGPL--3.0-2ea44f" alt="License: LGPL-3.0" /></a>
-  <a href="https://github.com/shuaiplus/NodeWarden/releases/latest"><img src="https://img.shields.io/github/v/release/shuaiplus/NodeWarden?display_name=tag" alt="Latest Release" /></a>
+[中文文档](./README_ZH.md)
 
-</p>
-
-<p align="center">
-  <a href="https://t.me/NodeWarden_News">Telegram Channel</a> |
-  <a href="https://t.me/NodeWarden_Official">Telegram Group</a>
-</p>
-
-<p align="center">
-  <a href="./README_ZH.md">中文</a> |
-  <a href="./CONTRIBUTING.md">Contributing</a> |
-  <a href="https://nodewarden.app">Official wiki</a>
-</p>
-
-> **Disclaimer**  
-> This project is for learning and discussion purposes only. Please back up your vault regularly.  
-> This project is not affiliated with Bitwarden. Please do not report NodeWarden issues to the official Bitwarden team.
+> **Disclaimer**
+> This project is for learning and discussion purposes only. Please back up your vault regularly.
+> This project is not affiliated with Bitwarden. Please do not report FlexVault issues to the official Bitwarden team.
 
 ---
 
-## Feature comparison with the official Bitwarden server
+## Features
 
-| Feature | Bitwarden Free | NodeWarden | Notes |
-|---|---|---|---|
-| Web vault | ✅ | ✅ | **Original Web Vault UI** |
-| TOTP | ❌ | ✅ | Includes `steam://` support |
-| **PWA / offline** | ❌ | ✅ | **Installable, offline** |
-| **Passkey login** | ✅ | ✅ | **passwordless auth** |
-| API keys | ✅ | ✅ | CLI keys; create and rotate |
-| Login 2FA | ✅ | ✅ | TOTP, YubiKey, Passkey |
-| 2FA recovery codes | ✅ | ✅ | One-time 2FA disable codes |
-| Real-time push sync | ✅ | ✅ | All device sync |
-| Attachments / Send | ✅ | ✅ | Cloudflare R2 or KV |
-| Import / export | ✅ | ✅ | Bitwarden JSON / CSV / **ZIP** |
-| **Cloud backup center** | ❌ | ✅ | **Scheduled WebDAV / S3 incrementals** |
-| Device management | ✅ | ✅ | **Remove devices; trust controls** |
-| Login requests | ✅ | ✅ | **Cross-device login approval/unlock** |
-| **Multi-user** | ✅ | ✅ | Invite-code registration |
-| Domain rules | ✅ | ✅ | Equivalent domains, global exclusions |
-| Fill-assist | ✅ | ✅ | `POST /fill-assist`|
-| Organizations / collections / roles | ✅ | ❌ | Not implemented |
-| SSO / SCIM / directory | ✅ | ❌ | Not implemented |
+- **Bitwarden-compatible API** — works with official Bitwarden clients (desktop, mobile, browser extension)
+- **Web Vault** — original web UI included
+- **Dual deployment modes** — Cloudflare Workers (original) or Node.js / Docker (self-hosted)
+- **SQLite storage** — local file-based database via `@libsql/client`, no external DB required
+- **File system storage** — attachments stored on local disk (R2-compatible adapter)
+- **WebSocket notifications** — real-time sync across devices (Durable Object replacement)
+- **TOTP / Passkey / WebAuthn** — full 2FA and passwordless auth support
+- **Backup center** — WebDAV / S3 scheduled incremental backups
+- **Import / Export** — Bitwarden JSON / CSV / ZIP
+- **Multi-user** — invite-code registration
+- **Domain rules** — equivalent domains, global exclusions
+- **PWA / offline mode** — installable, works offline
 
 ---
 
-## Tested clients
+## Quick Start (Docker)
 
-- ✅ Windows desktop
-- ✅ Mobile app
-- ✅ Browser extension
-- ✅ Linux desktop
-- ⚠️ macOS desktop not fully verified yet
+```bash
+docker run -d \
+  --name flexvault \
+  -p 3000:3000 \
+  -e JWT_SECRET=$(openssl rand -hex 32) \
+  -v flexvault-data:/app/data \
+  --restart unless-stopped \
+  registry.cn-guangzhou.aliyuncs.com/myskyts/nodewarden:latest
+```
+
+Open `http://localhost:3000` and create your admin account.
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `JWT_SECRET` | Yes | — | JWT signing secret, at least 32 characters |
+| `DATABASE_PATH` | No | `./data/nodewarden.db` | SQLite database file path |
+| `STORAGE_PATH` | No | `./data/attachments` | Attachment storage directory |
+| `PORT` | No | `3000` | HTTP listen port |
+| `HOST` | No | `0.0.0.0` | HTTP listen host |
+| `HIDE_WEB_VAULT` | No | — | Set to `1` to hide the Web Vault (API still works) |
+| `FRONTEND_PATH` | No | — | Custom frontend static file path |
 
 ---
 
-## Visual quick deploy
+## Docker Compose
 
-1. Fork the NodeWarden repository to your GitHub account
-2. Open [Cloudflare Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages/create)
-3. Choose **Continue with GitHub** and select your fork
-4. Set **build command** to `npm run build` and **deploy command** to `npm run deploy`
-   - For KV mode, change the deploy command to `npm run deploy:kv`
-5. After deployment finishes, open the generated Workers URL
-
-- The default Workers hostname may be unreachable on some networks. To use a custom domain, add it in [Workers settings](https://dash.cloudflare.com/?to=/:account/workers/services/view/nodewarden/production/settings).
-
-- If the site reports a missing `JWT_SECRET`, add it as a **Secret** in Workers settings. In production use a random string of at least 32 characters; do not use temporary or example values.
-
-- To hide the Web Vault, add a text variable named `HIDE_WEB_VAULT` with the value `1` under **Workers settings → Variables and Secrets**. While enabled, server-hosted frontend pages and static assets return `404 Not Found`, while the login, sync, attachment, icon, notification, and other server endpoints used by Bitwarden clients remain available; an already installed or cached PWA can continue using its local frontend. Delete the variable (or change it to anything other than `1`) to restore the server-hosted Web Vault.
-
-- In this flow you hand code to Cloudflare to build and deploy. `wrangler.toml` or `wrangler.kv.toml` in the repo defines binding names; the Worker initializes the D1 schema on first request—no manual SQL upload.
-
-
-> [!TIP] 
-> Default R2 vs optional KV:
->   | Storage | Card required | Max single attachment / Send file | Free tier |
->   |---|---|---|---|
->   | R2 | Yes | 100 MB (soft limit, adjustable) | 10 GB |
->   | KV | No | 25 MiB (Cloudflare limit) | 1 GB |
-
-
-## How to update
-
-- Manual: open your fork on GitHub; when the sync banner appears, click **Sync fork** → **Update branch**
-
-
-
-
-## CLI deploy
-
-```powershell
-git clone https://github.com/shuaiplus/NodeWarden.git
-cd NodeWarden
-
-npm install
-npx wrangler login
-
-# Default: R2 mode
-npm run deploy
-
-# Optional: KV mode
-npm run deploy:kv
-
-# Local development
-npm run dev
-npm run dev:kv
+```yaml
+services:
+  flexvault:
+    image: registry.cn-guangzhou.aliyuncs.com/myskyts/nodewarden:latest
+    ports:
+      - "3000:3000"
+    environment:
+      JWT_SECRET: "your-secret-at-least-32-chars"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
 ```
 
 ---
 
+## Build Docker Image
+
+This repo includes a GitHub Actions workflow (`.github/workflows/docker.yml`) for manual image build and push to Aliyun ACR.
+
+To build locally:
+
+```bash
+docker build -f Dockerfile.selfhosted -t flexvault:latest .
+```
+
+---
+
+## Local Development (Node.js)
+
+```bash
+git clone https://github.com/lj5645/FlexVault.git
+cd FlexVault
+npm install
+
+# Set required env
+export JWT_SECRET="your-secret-at-least-32-chars"
+
+# Run with tsx
+npx tsx --loader ./src/selfhosted/cloudflare-workers-loader.mjs ./src/selfhosted/index.ts
+```
+
+Requires Node.js 22+.
+
+---
+
+## Cloudflare Workers Deployment
+
+The original Cloudflare Workers deployment is fully supported. See `wrangler.toml` for configuration.
+
+```bash
+npm install
+npx wrangler login
+npm run build
+npm run deploy
+```
+
+---
+
+## Tested Clients
+
+- Windows desktop
+- Mobile app (iOS / Android)
+- Browser extension (Chrome / Firefox / Edge)
+- Linux desktop
+- Web Vault (browser)
+
+---
 
 ## License
 
@@ -129,24 +133,7 @@ LGPL-3.0 License
 
 ## Credits
 
-- [Bitwarden](https://bitwarden.com/) - Original design and clients
-- [Vaultwarden](https://github.com/dani-garcia/vaultwarden) - Server implementation reference
-- [Cloudflare Workers](https://workers.cloudflare.com/) - Serverless platform
-
----
-
-## Contributors
-
-<a href="https://github.com/shuaiplus/nodewarden/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=shuaiplus/nodewarden" alt="NodeWarden contributors" />
-</a>
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=shuaiplus%2FNodeWarden&type=timeline&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=shuaiplus/NodeWarden&type=timeline&theme=dark&legend=top-left&sealed_token=ck0AMqR8EFMjJ6tMbnGDHT5QwMpO85IUuN7i8e82zRRNPtjoLsAAFwVzxmSZwaid97wLUwy56EEiVE9M-OY0cf16bQKBrU9GaauFoOFXGq-vMqcOyk0tIc4b3o1ZGfDw9IH8o6NUxC125TJkjKSLn9fxhFUUeNr1f1El0UcAUcjsMPl_LX80qQrlvQqp" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=shuaiplus/NodeWarden&type=timeline&legend=top-left&sealed_token=ck0AMqR8EFMjJ6tMbnGDHT5QwMpO85IUuN7i8e82zRRNPtjoLsAAFwVzxmSZwaid97wLUwy56EEiVE9M-OY0cf16bQKBrU9GaauFoOFXGq-vMqcOyk0tIc4b3o1ZGfDw9IH8o6NUxC125TJkjKSLn9fxhFUUeNr1f1El0UcAUcjsMPl_LX80qQrlvQqp" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=shuaiplus/NodeWarden&type=timeline&legend=top-left&sealed_token=ck0AMqR8EFMjJ6tMbnGDHT5QwMpO85IUuN7i8e82zRRNPtjoLsAAFwVzxmSZwaid97wLUwy56EEiVE9M-OY0cf16bQKBrU9GaauFoOFXGq-vMqcOyk0tIc4b3o1ZGfDw9IH8o6NUxC125TJkjKSLn9fxhFUUeNr1f1El0UcAUcjsMPl_LX80qQrlvQqp" />
- </picture>
-</a>
+- [NodeWarden](https://github.com/shuaiplus/nodewarden) — Upstream project
+- [Bitwarden](https://bitwarden.com/) — Original design and clients
+- [Vaultwarden](https://github.com/dani-garcia/vaultwarden) — Server implementation reference
+- [Cloudflare Workers](https://workers.cloudflare.com/) — Serverless platform
