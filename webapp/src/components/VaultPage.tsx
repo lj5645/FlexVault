@@ -833,13 +833,20 @@ const folderName = useCallback((id: string | null | undefined): string => {
       setLocalError(t('txt_item_name_is_required'));
       return;
     }
+    // Sync may change the current selection while a draft is open. Save only
+    // the item that this draft belongs to, and retain it if the item disappeared.
+    const editedCipher = isCreating ? null : cipherById.get(nextDraft.id || selectedCipherId);
+    if (!isCreating && !editedCipher) {
+      setLocalError(t('txt_item_changed_elsewhere'));
+      return;
+    }
     setBusy(true);
     try {
       if (isCreating) {
         await props.onCreate(nextDraft, attachmentQueue);
-      } else if (selectedCipher) {
+      } else if (editedCipher) {
         const removeAttachmentIds = Object.keys(removedAttachmentIds).filter((id) => !!removedAttachmentIds[id]);
-        await props.onUpdate(selectedCipher, nextDraft, {
+        await props.onUpdate(editedCipher, nextDraft, {
           addFiles: attachmentQueue,
           removeAttachmentIds,
         });
