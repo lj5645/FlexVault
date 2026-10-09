@@ -4,6 +4,14 @@
 
 本仓库在 [NodeWarden](https://github.com/shuaiplus/nodewarden) 基础上新增了 Node.js 自托管部署能力，并保持与 Cloudflare Workers 部署模式完全兼容。
 
+### 同步上游（2026-10-09, commit `5148fb0`）
+- 合并上游 NodeWarden v1.8.1（9 个提交）：认证可靠性改进（`password-verifier` 模块、auth 服务加固）、密码库字段保留与 cipher 兼容性对齐、Web Vault 迁移至 Tailwind CSS 4（移除易受攻击的 braces 依赖，构建耗时 35s → 2s）、zh-TW 台湾本地化术语、Node.js 版本要求更新（`^22.19.0 || >=24.11.0`）、Bitwarden 全球域名规则同步、新增 vault-compatibility 测试（20 用例）
+- 冲突处理：package.json 采纳上游 Tailwind 4 技术栈（`@tailwindcss/vite`，移除 autoprefixer/postcss）及依赖版本，保留自托管依赖（`@libsql/client`、`dotenv`、`node-cron`、`ws`、`@types/node-cron`、`@types/ws`）；README 无冲突，FlexVault 内容保持不变
+
+### 修复（2026-10-09, commit `8dd1b56`）
+- 修复 `npm ci` 因 wrangler 4.146+ 要求 `@cloudflare/workers-types@^5`（peerOptional）而失败的问题：新增 `.npmrc`（`legacy-peer-deps=true`）并在 `Dockerfile.selfhosted` 中复制该文件进镜像；workers-types 为纯类型包，跳过该校验无运行时影响（上游声明 v4 不变）
+- 用 npm 10.9.8（与 Docker node:22-alpine 一致）重新生成 package-lock.json
+
 ### 同步上游（2026-09-27, commit `a2a7b54`）
 - 合并上游 nodewarden main（v1.8.0 后 25 个提交，上游 force push 重写历史）：sharp 0.35.4、browserslist 4.28.7 等 overrides 更新，备份列表容器宽度回流、列表工具栏换行、重复组索引唯一性、主题品牌色 token 化等 CSS/UX 修复，新增 RELEASE_NOTES.md
 - 冲突处理：README.md / README_ZH.md 保留 FlexVault 本地版本；package.json 合并上游 overrides 并保留自托管依赖（`@libsql/client`、`dotenv`、`node-cron`、`ws`）
