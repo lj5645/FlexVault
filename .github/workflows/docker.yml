@@ -9,15 +9,27 @@ on:
         default: 'latest'
 
 jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
+  # Build each architecture on a native runner. Emulating the Node toolchain
+  # under QEMU intermittently dies with SIGILL, and native runners also
+  # produce correct native addons for @libsql/client.
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      IMAGE: ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/flexvault
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -29,41 +41,96 @@ jobs:
           username: ${{ secrets.ALIYUN_USERNAME }}
           password: ${{ secrets.ALIYUN_PASSWORD }}
 
-      - name: Build and push
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile.selfhosted
-          platforms: linux/amd64,linux/arm64
-          push: true
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           provenance: false
           sbom: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          tags: |
-            ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/flexvault:latest
-            ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/flexvault:${{ github.event.inputs.tag }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  # Combine the per-architecture digests into the tagged multi-arch manifest.
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/flexvault
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Aliyun Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ALIYUN_REGISTRY }}
+          username: ${{ secrets.ALIYUN_USERNAME }}
+          password: ${{ secrets.ALIYUN_PASSWORD }}
+
+      - name: Create multi-arch manifest
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          images=()
+          for file in /tmp/digests/*; do
+            images+=("${IMAGE}@sha256:$(basename "${file}")")
+          done
+          docker buildx imagetools create \
+            -t "${IMAGE}:latest" \
+            -t "${IMAGE}:${TAG}" \
+            "${images[@]}"
+          docker buildx imagetools inspect "${IMAGE}:${TAG}"
 
       - name: Build summary
         env:
-          IMAGE: ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/flexvault:${{ github.event.inputs.tag }}
+          TAG: ${{ github.event.inputs.tag }}
         run: |
           {
             echo "## Docker Image Published"
             echo ""
-            echo "Image: \`${IMAGE}\`"
+            echo "Image: \`${IMAGE}:${TAG}\`"
+            echo ""
+            echo "### Platforms"
+            echo "- linux/amd64"
+            echo "- linux/arm64"
             echo ""
             echo "### Pull Command"
-            echo "\`\`\`"
-            echo "docker pull ${IMAGE}"
-            echo "\`\`\`"
+            echo '```'
+            echo "docker pull ${IMAGE}:${TAG}"
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
   # A successful push does not prove the image is usable. Build the amd64 image
   # locally and verify the Web Vault is actually served (the historical
   # regression was `/` returning 401 because dist/ was missing from the image).
   verify-image:
-    needs: build-and-push
+    needs: merge
     runs-on: ubuntu-latest
 
     steps:
@@ -81,8 +148,7 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: flexvault:smoke
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=amd64
 
       - name: Run container
         run: |
