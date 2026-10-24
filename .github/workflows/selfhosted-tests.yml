@@ -1,0 +1,53 @@
+name: Self-hosted checks
+
+on:
+  push:
+    paths:
+      - 'src/selfhosted/**'
+      - 'scripts/selfhosted-*.test.ts'
+      - 'Dockerfile.selfhosted'
+      - 'docker-compose.selfhosted.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig*.json'
+      - '.github/workflows/selfhosted-tests.yml'
+  pull_request:
+    paths:
+      - 'src/selfhosted/**'
+      - 'scripts/selfhosted-*.test.ts'
+      - 'Dockerfile.selfhosted'
+      - 'docker-compose.selfhosted.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig*.json'
+      - '.github/workflows/selfhosted-tests.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+          cache: npm
+
+      - name: Use the lockfile's npm version
+        run: npm install -g npm@10.9.8
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check self-hosted sources
+        run: npx tsc -p tsconfig.selfhosted.json --noEmit
+
+      - name: Run self-hosted tests
+        run: npm run test:selfhosted
+
+      - name: Build Web Vault
+        run: npm run build

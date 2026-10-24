@@ -34,12 +34,18 @@ docker run -d \
   --name flexvault \
   -p 3000:3000 \
   -e JWT_SECRET=$(openssl rand -hex 32) \
-  -v flexvault-data:/app/data \
+  -v nodewarden-data:/app/data \
   --restart unless-stopped \
-  registry.cn-guangzhou.aliyuncs.com/myskyts/nodewarden:latest
+  registry.cn-guangzhou.aliyuncs.com/myskyts/flexvault:latest
 ```
 
-Open `http://localhost:3000` and create your admin account.
+Open `http://localhost:3000` and create your admin account. The image bundles the
+Web Vault (`FRONTEND_PATH=/app/dist`), so a single container serves both the UI
+and the API.
+
+> Accessing FlexVault from another machine requires HTTPS: browsers only expose
+> `crypto.subtle` (used for client-side vault encryption) in a secure context.
+> See [Reverse proxy and HTTPS](#reverse-proxy-and-https).
 
 ### Environment Variables
 
@@ -51,7 +57,13 @@ Open `http://localhost:3000` and create your admin account.
 | `PORT` | No | `3000` | HTTP listen port |
 | `HOST` | No | `0.0.0.0` | HTTP listen host |
 | `HIDE_WEB_VAULT` | No | — | Set to `1` to hide the Web Vault (API still works) |
-| `FRONTEND_PATH` | No | — | Custom frontend static file path |
+| `FRONTEND_PATH` | No | `/app/dist` in Docker | Frontend static file directory |
+| `TRUST_PROXY` | No | `0` | Set to `1` only behind a proxy you control; enables `X-Forwarded-*` and `X-Real-IP` |
+| `ALLOW_LEGACY_WS_QUERY_TOKEN` | No | `0` | Deprecated: accept access JWTs in the WebSocket query string |
+| `MAX_UPLOAD_BYTES` | No | `104857600` | Hard cap for a request body / attachment upload |
+| `WEBAUTHN_RP_ID` | No | — | WebAuthn relying party ID (public hostname) |
+| `WEBAUTHN_RP_NAME` | No | `NodeWarden` | WebAuthn relying party display name |
+| `WEBAUTHN_ALLOWED_ORIGINS` | No | — | Comma-separated WebAuthn origins allowed for official clients |
 
 ---
 
@@ -60,15 +72,67 @@ Open `http://localhost:3000` and create your admin account.
 ```yaml
 services:
   flexvault:
-    image: registry.cn-guangzhou.aliyuncs.com/myskyts/nodewarden:latest
+    image: registry.cn-guangzhou.aliyuncs.com/myskyts/flexvault:latest
     ports:
       - "3000:3000"
     environment:
       JWT_SECRET: "your-secret-at-least-32-chars"
+      # Set to 1 only when TLS is terminated by a reverse proxy you control.
+      TRUST_PROXY: "1"
+      WEBAUTHN_RP_ID: "vault.example.com"
+      WEBAUTHN_ALLOWED_ORIGINS: "https://vault.example.com"
     volumes:
       - ./data:/app/data
     restart: unless-stopped
 ```
+
+> When using a bind mount (`./data:/app/data`), make sure the host directory is
+> writable by UID/GID 1000 (`chown -R 1000:1000 ./data`); the container runs as
+> the unprivileged `node` user. Named volumes are initialized with the correct
+> ownership automatically.
+
+---
+
+## Reverse proxy and HTTPS
+
+Browsers only expose `crypto.subtle` in a secure context, so the Web Vault must
+be served over HTTPS unless you access it via `localhost`. Terminate TLS in a
+reverse proxy and forward to the container:
+
+```nginx
+server {
+  listen 443 ssl;
+  server_name vault.example.com;
+
+  location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
+
+    # Required for Bitwarden's SignalR notifications.
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_read_timeout 3600s;
+
+    # Keep this in sync with MAX_UPLOAD_BYTES.
+    client_max_body_size 100m;
+  }
+}
+```
+
+Set `TRUST_PROXY=1` **only** when such a proxy is in front of the container.
+Without it, FlexVault ignores `X-Forwarded-*`/`X-Real-IP` and uses the socket
+address, which prevents clients from bypassing per-IP rate limits by spoofing
+headers.
+
+> The self-hosted notification hub keeps WebSocket connections in process
+> memory. Run a single replica; if you put multiple replicas behind a load
+> balancer, enable sticky sessions. Horizontal scaling requires an external
+> pub/sub adapter and is not supported out of the box.
 
 ---
 

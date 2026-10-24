@@ -3,18 +3,32 @@ config();
 
 import { webcrypto } from 'crypto';
 import http from 'http';
-import { URL } from 'url';
+import path from 'path';
+import { URL, fileURLToPath } from 'url';
 
 if (typeof (globalThis as unknown as { crypto?: unknown }).crypto === 'undefined') {
   (globalThis as unknown as { crypto: typeof webcrypto }).crypto = webcrypto;
 }
 
 import './cache-polyfill';
-import { loadConfigFromEnv, createEnv, setupNotificationsHub, createAssetsHandler, SelfHostedEnv } from './env';
+import {
+  loadConfigFromEnv,
+  createEnv,
+  setupNotificationsHub,
+  createAssetsHandler,
+  DEFAULT_CONFIG,
+  SelfHostedEnv,
+} from './env';
+import { nodeRequestToWebRequest, webResponseToNodeResponse } from './http';
 import { StorageService } from '../services/storage';
 import { handleRequest } from '../router';
 import { applyCors } from '../utils/response';
 import { runScheduledBackupIfDue } from '../handlers/backup';
+import {
+  isBackendRequestPath,
+  isWebVaultHidden,
+  webVaultNotFoundResponse,
+} from '../web-vault-visibility';
 import cron from 'node-cron';
 
 let dbInitialized = false;
@@ -27,27 +41,25 @@ function normalizeRequestUrl(request: Request): Request {
   if (normalizedPathname === url.pathname) return request;
 
   url.pathname = normalizedPathname;
-  return new Request(url.toString(), request);
-}
 
-function isWorkerHandledPath(path: string): boolean {
-  return (
-    path.startsWith('/api/') ||
-    path.startsWith('/identity/') ||
-    path.startsWith('/icons/') ||
-    path.startsWith('/notifications/') ||
-    path.startsWith('/.well-known/') ||
-    path === '/config' ||
-    path === '/api/config' ||
-    path === '/api/version'
-  );
+  // Rebuilding a request with a streaming body requires duplex: 'half' in Node,
+  // otherwise the Request constructor throws for every upload.
+  const hasBody = request.method !== 'GET' && request.method !== 'HEAD' && request.body !== null;
+  const init: RequestInit & { duplex?: 'half' } = {
+    method: request.method,
+    headers: request.headers,
+    body: hasBody ? request.body : undefined,
+    redirect: request.redirect,
+  };
+  if (hasBody) init.duplex = 'half';
+  return new Request(url.toString(), init);
 }
 
 async function maybeServeAsset(request: Request, env: SelfHostedEnv): Promise<Response | null> {
   if (!env.ASSETS) return null;
   if (request.method !== 'GET' && request.method !== 'HEAD') return null;
   const url = new URL(request.url);
-  if (isWorkerHandledPath(url.pathname)) return null;
+  if (isBackendRequestPath(url.pathname)) return null;
 
   return env.ASSETS.fetch(request);
 }
@@ -76,6 +88,14 @@ async function ensureDatabaseInitialized(env: SelfHostedEnv): Promise<void> {
 
 async function handleHttpRequest(request: Request, env: SelfHostedEnv): Promise<Response> {
   const normalizedRequest = normalizeRequestUrl(request);
+  const requestPath = new URL(normalizedRequest.url).pathname;
+
+  // Match the Workers entrypoint: HIDE_WEB_VAULT only hides the UI, never the
+  // API, and returns a non-cacheable 404 for everything else.
+  if (isWebVaultHidden(env as any) && !isBackendRequestPath(requestPath)) {
+    return applyCors(normalizedRequest, webVaultNotFoundResponse(normalizedRequest), env as any);
+  }
+
   const assetResponse = await maybeServeAsset(normalizedRequest, env);
   if (assetResponse) {
     return applyCors(normalizedRequest, assetResponse, env as any);
@@ -105,54 +125,6 @@ async function handleHttpRequest(request: Request, env: SelfHostedEnv): Promise<
   return applyCors(normalizedRequest, resp, env as any);
 }
 
-function nodeRequestToWebRequest(req: http.IncomingMessage, body?: Buffer): Request {
-  const protocol = (req.socket as any).encrypted ? 'https' : 'http';
-  const host = req.headers.host || 'localhost';
-  const url = `${protocol}://${host}${req.url}`;
-
-  const headers = new Headers();
-  for (const [key, value] of Object.entries(req.headers)) {
-    if (value !== undefined) {
-      if (Array.isArray(value)) {
-        for (const v of value) {
-          headers.append(key, v);
-        }
-      } else {
-        headers.set(key, value);
-      }
-    }
-  }
-
-  const method = req.method || 'GET';
-  const hasBody = method !== 'GET' && method !== 'HEAD' && body && body.length > 0;
-
-  return new Request(url, {
-    method,
-    headers,
-    body: hasBody ? body : undefined,
-  });
-}
-
-async function webResponseToNodeResponse(response: Response, res: http.ServerResponse): Promise<void> {
-  const headers: Record<string, string> = {};
-  response.headers.forEach((value, key) => {
-    headers[key] = value;
-  });
-
-  res.writeHead(response.status, headers);
-
-  if (response.body) {
-    const reader = response.body.getReader();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      res.write(Buffer.from(value));
-    }
-  }
-
-  res.end();
-}
-
 export async function startServer(): Promise<void> {
   const config = loadConfigFromEnv();
   const env = createEnv(config);
@@ -163,23 +135,33 @@ export async function startServer(): Promise<void> {
 
   const server = http.createServer(async (req: http.IncomingMessage, res: http.ServerResponse) => {
     try {
-      const chunks: Buffer[] = [];
-      for await (const chunk of req) {
-        chunks.push(chunk);
-      }
-      const body = Buffer.concat(chunks);
+      const { request, rejection } = nodeRequestToWebRequest(req, {
+        trustProxy: config.trustProxy,
+        maxUploadBytes: config.maxUploadBytes,
+      });
 
-      const webRequest = nodeRequestToWebRequest(req, body);
-      const webResponse = await handleHttpRequest(webRequest, env);
+      const webResponse = rejection
+        ? applyCors(request, rejection, env as any)
+        : await handleHttpRequest(request, env);
       await webResponseToNodeResponse(webResponse, res);
     } catch (error) {
       console.error('Request error:', error);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Internal server error' }));
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Internal server error' }));
+      } else if (!res.destroyed) {
+        res.destroy();
+      }
     }
   });
 
-  setupNotificationsHub(server, env, config.jwtSecret);
+  const notificationsHub = setupNotificationsHub(
+    server,
+    env,
+    config.jwtSecret,
+    DEFAULT_CONFIG.websocketPath,
+    { allowLegacyQueryToken: config.allowLegacyWsQueryToken }
+  );
 
   await new Promise<void>((resolve) => {
     server.listen(config.port, config.host, () => {
@@ -188,7 +170,12 @@ export async function startServer(): Promise<void> {
     });
   });
 
-  cron.schedule('*/5 * * * *', async () => {
+  let backupRunning = false;
+  const backupTask = cron.schedule('*/5 * * * *', async () => {
+    // A slow backup must not overlap with the next tick, otherwise two jobs can
+    // write to the same remote path at once.
+    if (backupRunning) return;
+    backupRunning = true;
     try {
       await ensureDatabaseInitialized(env);
       if (dbInitError) {
@@ -198,17 +185,26 @@ export async function startServer(): Promise<void> {
       await runScheduledBackupIfDue(env as any);
     } catch (error) {
       console.error('Scheduled backup failed:', error);
+    } finally {
+      backupRunning = false;
     }
   });
 
+  let shuttingDown = false;
   const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log('\nShutting down...');
-    // Close the database connection before stopping the server.
+
+    // Stop new work first, then drain connections, and only close the database
+    // once in-flight requests can no longer use it.
+    backupTask.stop();
     try {
-      env.DB.close();
+      notificationsHub.close();
     } catch {
-      // Ignore close errors during shutdown
+      // Ignore hub close errors during shutdown
     }
+
     // Gracefully close the HTTP server: stop accepting new connections and
     // wait for in-flight requests to finish. Force-exit after 10s timeout
     // to avoid hanging on stuck connections.
@@ -216,6 +212,12 @@ export async function startServer(): Promise<void> {
       new Promise<void>((resolve) => server.close(() => resolve())),
       new Promise<void>((resolve) => setTimeout(() => resolve(), 10000)),
     ]);
+
+    try {
+      env.DB.close();
+    } catch {
+      // Ignore close errors during shutdown
+    }
     process.exit(0);
   };
 
@@ -228,7 +230,19 @@ export { SQLiteD1Adapter } from './database';
 export { FileSystemR2Adapter } from './storage';
 export { NotificationsHubNamespace } from './websocket';
 
-startServer().catch((error) => {
-  console.error('Failed to start server:', error);
-  process.exit(1);
-});
+function isMainModule(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return path.resolve(entry) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
+  startServer().catch((error) => {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  });
+}

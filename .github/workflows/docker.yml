@@ -11,24 +11,24 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
-      
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      
+
       - name: Login to Aliyun Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ secrets.ALIYUN_REGISTRY }}
           username: ${{ secrets.ALIYUN_USERNAME }}
           password: ${{ secrets.ALIYUN_PASSWORD }}
-      
+
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
@@ -38,10 +38,12 @@ jobs:
           push: true
           provenance: false
           sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: |
             ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/flexvault:latest
             ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/flexvault:${{ github.event.inputs.tag }}
-      
+
       - name: Build summary
         run: |
           echo "## Docker Image Published" >> $GITHUB_STEP_SUMMARY
@@ -49,6 +51,79 @@ jobs:
           echo "Image: \`${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/flexvault:${{ github.event.inputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Pull Command" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "docker pull ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/flexvault:${{ github.event.inputs.tag }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+  # A successful push does not prove the image is usable. Build the amd64 image
+  # locally and verify the Web Vault is actually served (the historical
+  # regression was `/` returning 401 because dist/ was missing from the image).
+  verify-image:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build amd64 image for smoke test
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.selfhosted
+          platforms: linux/amd64
+          load: true
+          tags: flexvault:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run container
+        run: |
+          docker run -d --name flexvault-smoke \
+            -p 3000:3000 \
+            -e JWT_SECRET=smoke-test-secret-at-least-32-characters-long \
+            flexvault:smoke
+
+      - name: Smoke test endpoints
+        run: |
+          set -euo pipefail
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/api/version > /dev/null; then
+              echo "Server is up after ${attempt} attempt(s)"
+              break
+            fi
+            if [ "$attempt" = "30" ]; then
+              echo "Server did not become ready" >&2
+              docker logs flexvault-smoke >&2
+              exit 1
+            fi
+            sleep 2
+          done
+
+          root_status=$(curl -sS -o /tmp/root.html -w '%{http_code}' http://127.0.0.1:3000/)
+          test "$root_status" = "200" || {
+            echo "GET / returned ${root_status}, expected 200 (Web Vault missing?)" >&2
+            cat /tmp/root.html >&2
+            exit 1
+          }
+          grep -q 'id="root"' /tmp/root.html
+          curl -fsSI http://127.0.0.1:3000/ | grep -qi '^content-type: text/html'
+
+          asset_path=$(grep -oE '/assets/[^"]+\.js' /tmp/root.html | head -n 1)
+          test -n "$asset_path"
+          curl -fsS "http://127.0.0.1:3000${asset_path}" > /dev/null
+          curl -fsSI "http://127.0.0.1:3000${asset_path}" | grep -qi '^cache-control:.*immutable'
+
+          echo "Smoke test passed"
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker logs flexvault-smoke || true
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f flexvault-smoke || true

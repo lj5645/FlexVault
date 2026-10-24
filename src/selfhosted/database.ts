@@ -1,6 +1,7 @@
 import { createClient, Client, Row } from '@libsql/client';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 
 export interface D1Result<T = unknown> {
   results: T[];
@@ -107,12 +108,22 @@ export class SQLiteD1Adapter {
   }
 
   async dump(): Promise<ArrayBuffer> {
-    // Return the raw SQLite database file bytes.
-    // Note: if the database is in WAL mode and actively being written, the dump
-    // may not include the latest WAL changes. For consistent snapshots, use the
-    // backup-archive service which uses SQL-level export instead.
-    const buffer = await fs.promises.readFile(this.dbPath);
-    return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+    // Copying the main database file while it is in WAL mode can silently drop
+    // recently committed transactions. VACUUM INTO writes a transactionally
+    // consistent snapshot (including WAL content) to a separate file.
+    const tmpPath = path.join(
+      path.dirname(this.dbPath),
+      `.dump-${process.pid}-${crypto.randomBytes(8).toString('hex')}.db`
+    );
+    const sqlLiteral = tmpPath.replace(/'/g, "''");
+
+    try {
+      await this.db.execute(`VACUUM INTO '${sqlLiteral}'`);
+      const buffer = await fs.promises.readFile(tmpPath);
+      return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+    } finally {
+      await fs.promises.unlink(tmpPath).catch(() => undefined);
+    }
   }
 
   async batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {

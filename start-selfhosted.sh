@@ -1,21 +1,23 @@
 #!/bin/bash
+set -euo pipefail
+cd "$(dirname "$0")"
 
-echo "Starting NodeWarden Self-Hosted Server..."
+echo "Starting FlexVault Self-Hosted Server..."
 echo
 
 if [ ! -f .env ]; then
-    echo "Creating .env file from example..."
     cp .env.selfhosted.example .env
-    echo
-    echo "Please edit .env file with your configuration and run again."
-    echo
-    ${EDITOR:-nano} .env
+    echo "Created .env from .env.selfhosted.example."
+    echo "Edit .env (at minimum JWT_SECRET) and run this script again."
     exit 1
 fi
 
-echo "Loading environment from .env..."
-export $(grep -v '^#' .env | xargs)
+if [ ! -x ./node_modules/.bin/tsx ]; then
+    echo "Dependencies are not installed. Run: npm install"
+    exit 1
+fi
 
-echo
-echo "Starting server..."
-node dist/src/selfhosted/index.js
+# The server loads .env itself via dotenv; no shell export needed.
+exec ./node_modules/.bin/tsx \
+    --loader ./src/selfhosted/cloudflare-workers-loader.mjs \
+    ./src/selfhosted/index.ts

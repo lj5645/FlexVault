@@ -32,12 +32,16 @@ docker run -d \
   --name flexvault \
   -p 3000:3000 \
   -e JWT_SECRET=$(openssl rand -hex 32) \
-  -v flexvault-data:/app/data \
+  -v nodewarden-data:/app/data \
   --restart unless-stopped \
-  registry.cn-guangzhou.aliyuncs.com/myskyts/nodewarden:latest
+  registry.cn-guangzhou.aliyuncs.com/myskyts/flexvault:latest
 ```
 
-打开 `http://localhost:3000` 创建管理员账号。
+打开 `http://localhost:3000` 创建管理员账号。镜像已内置 Web Vault
+（`FRONTEND_PATH=/app/dist`），单容器即可同时提供界面和 API。
+
+> 从其他机器访问时必须使用 HTTPS：浏览器只在安全上下文中提供
+> `crypto.subtle`（客户端加密依赖它）。参见[反向代理与 HTTPS](#反向代理与-https)。
 
 ### 环境变量
 
@@ -49,7 +53,13 @@ docker run -d \
 | `PORT` | 否 | `3000` | HTTP 监听端口 |
 | `HOST` | 否 | `0.0.0.0` | HTTP 监听地址 |
 | `HIDE_WEB_VAULT` | 否 | — | 设为 `1` 隐藏 Web Vault（API 仍可用） |
-| `FRONTEND_PATH` | 否 | — | 自定义前端静态文件路径 |
+| `FRONTEND_PATH` | 否 | Docker 内为 `/app/dist` | 前端静态文件目录 |
+| `TRUST_PROXY` | 否 | `0` | 仅在受控反向代理后设为 `1`，启用 `X-Forwarded-*` / `X-Real-IP` |
+| `ALLOW_LEGACY_WS_QUERY_TOKEN` | 否 | `0` | 已弃用：允许 WebSocket 查询串携带 access JWT |
+| `MAX_UPLOAD_BYTES` | 否 | `104857600` | 单次请求体/附件上传硬上限 |
+| `WEBAUTHN_RP_ID` | 否 | — | WebAuthn 依赖方 ID（公网域名） |
+| `WEBAUTHN_RP_NAME` | 否 | `NodeWarden` | WebAuthn 依赖方显示名称 |
+| `WEBAUTHN_ALLOWED_ORIGINS` | 否 | — | 允许官方客户端使用 WebAuthn 的来源，逗号分隔 |
 
 ---
 
@@ -58,15 +68,63 @@ docker run -d \
 ```yaml
 services:
   flexvault:
-    image: registry.cn-guangzhou.aliyuncs.com/myskyts/nodewarden:latest
+    image: registry.cn-guangzhou.aliyuncs.com/myskyts/flexvault:latest
     ports:
       - "3000:3000"
     environment:
       JWT_SECRET: "your-secret-at-least-32-chars"
+      # 仅在受控反向代理终止 TLS 时设为 1
+      TRUST_PROXY: "1"
+      WEBAUTHN_RP_ID: "vault.example.com"
+      WEBAUTHN_ALLOWED_ORIGINS: "https://vault.example.com"
     volumes:
       - ./data:/app/data
     restart: unless-stopped
 ```
+
+> 使用 bind mount（`./data:/app/data`）时，请确保宿主机目录对 UID/GID 1000
+> 可写（`chown -R 1000:1000 ./data`）；容器以非特权 `node` 用户运行。命名卷会
+> 自动继承镜像内的属主。
+
+---
+
+## 反向代理与 HTTPS
+
+浏览器只在安全上下文中提供 `crypto.subtle`，因此除 `localhost` 外，Web Vault
+必须通过 HTTPS 访问。建议由反向代理终止 TLS：
+
+```nginx
+server {
+  listen 443 ssl;
+  server_name vault.example.com;
+
+  location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
+
+    # Bitwarden SignalR 通知需要 WebSocket 升级
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_read_timeout 3600s;
+
+    # 与 MAX_UPLOAD_BYTES 保持一致
+    client_max_body_size 100m;
+  }
+}
+```
+
+**仅当**容器确实位于此类代理之后时才设置 `TRUST_PROXY=1`。未开启时，
+FlexVault 会忽略 `X-Forwarded-*` / `X-Real-IP` 并使用 socket 地址，防止客户端
+伪造请求头绕过按 IP 的限流。
+
+> 自托管通知中心把 WebSocket 连接保存在进程内存中。请保持单副本运行；若必须
+> 多副本，请在负载均衡器上启用会话粘滞。水平扩展需要外部 pub/sub 适配器，当前
+> 版本不内置。
 
 ---
 

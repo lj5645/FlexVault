@@ -1,23 +1,53 @@
-FROM node:22-alpine
+# syntax=docker/dockerfile:1
+#
+# Self-hosted FlexVault image.
+#
+# Stage 1 builds the Web Vault (Vite). Stage 2 runs the server with tsx and
+# ships the built frontend so `GET /` works out of the box.
+#
+# The npm version is pinned to match the lockfile generator (npm 10.9.8), so
+# `npm ci` stays deterministic regardless of which npm ships in the base image.
+
+FROM node:22.19-alpine AS frontend
+
+WORKDIR /src
+
+COPY package.json package-lock.json .npmrc ./
+COPY webapp ./webapp
+COPY shared ./shared
+
+RUN npm install -g npm@10.9.8 \
+ && npm ci \
+ && npm run build
+
+FROM node:22.19-alpine AS runtime
 
 WORKDIR /app
 
-COPY package*.json ./
-COPY .npmrc ./
-COPY tsconfig.json ./
-COPY tsconfig.selfhosted.json ./
+ENV NODE_ENV=production \
+    DATABASE_PATH=/app/data/nodewarden.db \
+    STORAGE_PATH=/app/data/attachments \
+    FRONTEND_PATH=/app/dist
+
+COPY package.json package-lock.json .npmrc ./
+COPY tsconfig.json tsconfig.selfhosted.json ./
 COPY src ./src
 COPY shared ./shared
 COPY migrations ./migrations
 
-RUN npm ci
+# Reuse the install from the build stage (same base image and platform) instead
+# of downloading dependencies twice.
+COPY --from=frontend /src/node_modules ./node_modules
+COPY --from=frontend /src/dist ./dist
 
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data \
+ && chown -R node:node /app
 
-ENV NODE_ENV=production
-ENV DATABASE_PATH=/app/data/nodewarden.db
-ENV STORAGE_PATH=/app/data/attachments
+USER node
 
 EXPOSE 3000
 
-CMD ["npx", "tsx", "--loader", "src/selfhosted/cloudflare-workers-loader.mjs", "src/selfhosted/index.ts"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+  CMD wget -q -O /dev/null "http://127.0.0.1:${PORT:-3000}/api/version" || exit 1
+
+CMD ["./node_modules/.bin/tsx", "--loader", "./src/selfhosted/cloudflare-workers-loader.mjs", "./src/selfhosted/index.ts"]

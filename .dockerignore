@@ -1,0 +1,35 @@
+# VCS / editor
+.git
+.gitignore
+.github
+.vscode
+.idea
+*.swp
+*.swo
+
+# Dependencies (installed inside the image)
+node_modules
+**/node_modules
+
+# Build output is produced inside the image
+dist
+dist-server
+
+# Runtime data / secrets must never enter the build context
+data
+.env
+.env.*
+!.env.selfhosted.example
+.wrangler
+
+# Local-only documentation and artifacts
+*.log
+npm-debug.log*
+tmp
+.tmp
+.tmp-bitwarden-clients
+.codegraph
+NodeWarden.png
+NodeWarden.svg
+PROJECT_CHANGES.md
+RELEASE_NOTES.md

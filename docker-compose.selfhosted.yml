@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   nodewarden:
     build:
@@ -9,12 +7,21 @@ services:
       - "3000:3000"
     environment:
       - JWT_SECRET=${JWT_SECRET}
-      - TOTP_SECRET=${TOTP_SECRET:-}
       - DATABASE_PATH=/app/data/nodewarden.db
       - STORAGE_PATH=/app/data/attachments
       - PORT=3000
       - HOST=0.0.0.0
+      # Set to 1 only when the container is behind a reverse proxy you control.
+      - TRUST_PROXY=${TRUST_PROXY:-0}
+      # Deprecated: allows long-lived access tokens in the WebSocket query string.
+      - ALLOW_LEGACY_WS_QUERY_TOKEN=${ALLOW_LEGACY_WS_QUERY_TOKEN:-0}
+      - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-104857600}
+      # Required for WebAuthn/passkeys when the public origin differs from the
+      # host header seen by the container.
+      - WEBAUTHN_RP_ID=${WEBAUTHN_RP_ID:-}
+      - WEBAUTHN_ALLOWED_ORIGINS=${WEBAUTHN_ALLOWED_ORIGINS:-}
     volumes:
+      # Keep the historical volume name so existing deployments do not lose data.
       - nodewarden-data:/app/data
     restart: unless-stopped
     healthcheck:

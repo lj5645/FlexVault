@@ -2,6 +2,8 @@ import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { Readable, Transform } from 'stream';
+import { pipeline } from 'stream/promises';
 
 export interface R2HTTPMetadata {
   contentType?: string;
@@ -36,7 +38,15 @@ export interface R2PutOptions {
   md5?: string;
 }
 
-class R2ObjectImpl implements R2ObjectBody {
+interface StoredMetadata {
+  httpMetadata?: R2HTTPMetadata;
+  customMetadata?: Record<string, string>;
+  uploaded?: string;
+  size?: number;
+  etag?: string;
+}
+
+class R2ObjectImpl implements R2Object {
   key: string;
   size: number;
   etag: string;
@@ -45,42 +55,32 @@ class R2ObjectImpl implements R2ObjectBody {
   uploaded: Date;
   httpMetadata?: R2HTTPMetadata;
   customMetadata?: Record<string, string>;
-  body: ReadableStream;
+  body: ReadableStream | null;
 
   constructor(
     key: string,
-    data: Buffer,
-    metadata?: {
+    details: {
+      size: number;
+      etag: string;
+      body: ReadableStream | null;
+      uploaded?: Date;
       httpMetadata?: R2HTTPMetadata;
       customMetadata?: Record<string, string>;
-      uploaded?: Date;
     }
   ) {
     this.key = key;
-    this.size = data.length;
-    this.etag = this.computeEtag(data);
-    this.httpEtag = `"${this.etag}"`;
-    this.checksums = { md5: this.etag };
-    this.uploaded = metadata?.uploaded ?? new Date();
-    this.httpMetadata = metadata?.httpMetadata;
-    this.customMetadata = metadata?.customMetadata;
-    this.body = this.bufferToReadableStream(data);
-  }
-
-  private computeEtag(data: Buffer): string {
-    return crypto.createHash('md5').update(data).digest('hex');
-  }
-
-  private bufferToReadableStream(buffer: Buffer): ReadableStream {
-    return new ReadableStream({
-      start(controller) {
-        controller.enqueue(new Uint8Array(buffer));
-        controller.close();
-      },
-    });
+    this.size = details.size;
+    this.etag = details.etag;
+    this.httpEtag = `"${details.etag}"`;
+    this.checksums = { md5: details.etag };
+    this.uploaded = details.uploaded ?? new Date();
+    this.httpMetadata = details.httpMetadata;
+    this.customMetadata = details.customMetadata;
+    this.body = details.body;
   }
 
   async arrayBuffer(): Promise<ArrayBuffer> {
+    if (!this.body) return new ArrayBuffer(0);
     const reader = this.body.getReader();
     const chunks: Uint8Array[] = [];
     while (true) {
@@ -116,6 +116,15 @@ class R2ObjectImpl implements R2ObjectBody {
   }
 }
 
+function toNodeReadable(value: string | ArrayBuffer | ArrayBufferView | ReadableStream): Readable {
+  if (typeof value === 'string') return Readable.from([Buffer.from(value, 'utf-8')]);
+  if (value instanceof ReadableStream) return Readable.fromWeb(value as any);
+  if (ArrayBuffer.isView(value)) {
+    return Readable.from([Buffer.from(value.buffer, value.byteOffset, value.byteLength)]);
+  }
+  return Readable.from([Buffer.from(value)]);
+}
+
 export class FileSystemR2Adapter {
   private basePath: string;
   private metadataDir: string;
@@ -129,7 +138,7 @@ export class FileSystemR2Adapter {
 
   private async ensureDirs(): Promise<void> {
     if (this.initialized) return;
-    
+
     if (this.initPromise) {
       await this.initPromise;
       return;
@@ -145,10 +154,9 @@ export class FileSystemR2Adapter {
   }
 
   private sanitizeKey(key: string): string {
-    let sanitized = key.replace(/\.\./g, '');
-    sanitized = sanitized.replace(/^\/+/, '');
-    sanitized = sanitized.replace(/\\/g, '/');
-    return sanitized;
+    // Keep `..` segments intact: validatePath below rejects escapes explicitly
+    // rather than silently rewriting a traversal key into a different valid one.
+    return key.replace(/^\/+/, '').replace(/\\/g, '/');
   }
 
   private getFilePath(key: string): string {
@@ -171,6 +179,15 @@ export class FileSystemR2Adapter {
     return normalized.startsWith(this.basePath + path.sep);
   }
 
+  private async readMetadata(metadataPath: string): Promise<StoredMetadata> {
+    try {
+      const raw = await fs.readFile(metadataPath, 'utf-8');
+      return JSON.parse(raw) as StoredMetadata;
+    } catch {
+      return {};
+    }
+  }
+
   async put(
     key: string,
     value: string | ArrayBuffer | ArrayBufferView | ReadableStream,
@@ -179,7 +196,7 @@ export class FileSystemR2Adapter {
     await this.ensureDirs();
 
     const filePath = this.getFilePath(key);
-    
+
     if (!this.validatePath(filePath)) {
       throw new Error('Invalid key: path traversal detected');
     }
@@ -188,56 +205,54 @@ export class FileSystemR2Adapter {
     const dir = path.dirname(filePath);
     await fs.mkdir(dir, { recursive: true });
 
-    let buffer: Buffer;
-    if (typeof value === 'string') {
-      buffer = Buffer.from(value, 'utf-8');
-    } else if (value instanceof ReadableStream) {
-      buffer = await this.readableStreamToBuffer(value);
-    } else if (ArrayBuffer.isView(value)) {
-      buffer = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
-    } else if (value instanceof ArrayBuffer) {
-      buffer = Buffer.from(value);
-    } else {
-      buffer = Buffer.from(value as ArrayBuffer);
+    // Stream into a temp file in the same directory, then rename. This keeps
+    // large uploads out of memory and avoids exposing a partially written
+    // object under the final key.
+    const tempPath = `${filePath}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+    const hash = crypto.createHash('md5');
+    let size = 0;
+
+    const meter = new Transform({
+      transform(chunk, _encoding, callback) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        size += buffer.length;
+        hash.update(buffer);
+        callback(null, buffer);
+      },
+    });
+
+    try {
+      await pipeline(toNodeReadable(value), meter, fsSync.createWriteStream(tempPath));
+      await fs.rename(tempPath, filePath);
+    } catch (error) {
+      await fs.unlink(tempPath).catch(() => undefined);
+      throw error;
     }
 
-    await fs.writeFile(filePath, buffer);
-
-    const metadata = {
+    const etag = hash.digest('hex');
+    const uploaded = new Date();
+    const metadata: StoredMetadata = {
       httpMetadata: options?.httpMetadata,
       customMetadata: options?.customMetadata,
-      uploaded: new Date().toISOString(),
-      size: buffer.length,
+      uploaded: uploaded.toISOString(),
+      size,
+      etag,
     };
     await fs.writeFile(metadataPath, JSON.stringify(metadata));
 
-    return new R2ObjectImpl(key, buffer, {
+    return new R2ObjectImpl(key, {
+      size,
+      etag,
+      body: null,
+      uploaded,
       httpMetadata: options?.httpMetadata,
       customMetadata: options?.customMetadata,
     });
   }
 
-  private async readableStreamToBuffer(stream: ReadableStream): Promise<Buffer> {
-    const reader = stream.getReader();
-    const chunks: Uint8Array[] = [];
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-    }
-    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-    const result = Buffer.alloc(totalLength);
-    let offset = 0;
-    for (const chunk of chunks) {
-      result.set(chunk, offset);
-      offset += chunk.length;
-    }
-    return result;
-  }
-
   async get(key: string): Promise<R2ObjectBody | null> {
     const filePath = this.getFilePath(key);
-    
+
     if (!this.validatePath(filePath)) {
       return null;
     }
@@ -245,30 +260,22 @@ export class FileSystemR2Adapter {
     const metadataPath = this.getMetadataPath(key);
 
     try {
-      const [data, metadataRaw] = await Promise.all([
-        fs.readFile(filePath),
-        fs.readFile(metadataPath, 'utf-8').catch(() => null),
-      ]);
+      const [stat, metadata] = await Promise.all([fs.stat(filePath), this.readMetadata(metadataPath)]);
+      if (!stat.isFile()) return null;
 
-      let metadata: {
-        httpMetadata?: R2HTTPMetadata;
-        customMetadata?: Record<string, string>;
-        uploaded?: string;
-      } = {};
+      // Older objects were written before etags were persisted; derive a stable
+      // fallback from the file itself.
+      const etag = metadata.etag || `s${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}`;
+      const body = Readable.toWeb(fsSync.createReadStream(filePath)) as unknown as ReadableStream;
 
-      if (metadataRaw) {
-        try {
-          metadata = JSON.parse(metadataRaw);
-        } catch {
-          // ignore parse errors
-        }
-      }
-
-      return new R2ObjectImpl(key, data, {
+      return new R2ObjectImpl(key, {
+        size: stat.size,
+        etag,
+        body,
+        uploaded: metadata.uploaded ? new Date(metadata.uploaded) : stat.mtime,
         httpMetadata: metadata.httpMetadata,
         customMetadata: metadata.customMetadata,
-        uploaded: metadata.uploaded ? new Date(metadata.uploaded) : undefined,
-      });
+      }) as R2ObjectBody;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         return null;
@@ -279,6 +286,8 @@ export class FileSystemR2Adapter {
 
   async delete(key: string): Promise<void> {
     const filePath = this.getFilePath(key);
+    if (!this.validatePath(filePath)) return;
+
     const metadataPath = this.getMetadataPath(key);
 
     await Promise.all([
@@ -301,15 +310,15 @@ export class FileSystemR2Adapter {
     cursor?: string;
   }> {
     await this.ensureDirs();
-    
+
     const prefix = options?.prefix || '';
     const limit = options?.limit || 1000;
 
     const objects: R2Object[] = [];
-    
+
     const scanDir = async (dir: string, prefixPath: string): Promise<void> => {
       if (objects.length >= limit) return;
-      
+
       let entries: fsSync.Dirent[];
       try {
         entries = await fs.readdir(dir, { withFileTypes: true });
@@ -329,31 +338,18 @@ export class FileSystemR2Adapter {
         } else {
           if (prefix && !key.startsWith(prefix)) continue;
 
-          const _stat = await fs.stat(fullPath);
-          const metadataPath = this.getMetadataPath(key);
-          let metadata: {
-            httpMetadata?: R2HTTPMetadata;
-            customMetadata?: Record<string, string>;
-            uploaded?: string;
-          } = {};
-
-          try {
-            const metadataRaw = await fs.readFile(metadataPath, 'utf-8');
-            metadata = JSON.parse(metadataRaw);
-          } catch {
-            // ignore
-          }
+          const stat = await fs.stat(fullPath);
+          const metadata = await this.readMetadata(this.getMetadataPath(key));
 
           objects.push(
-            new R2ObjectImpl(
-              key,
-              Buffer.alloc(0),
-              {
-                httpMetadata: metadata.httpMetadata,
-                customMetadata: metadata.customMetadata,
-                uploaded: metadata.uploaded ? new Date(metadata.uploaded) : undefined,
-              }
-            )
+            new R2ObjectImpl(key, {
+              size: stat.size,
+              etag: metadata.etag || `s${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}`,
+              body: null,
+              uploaded: metadata.uploaded ? new Date(metadata.uploaded) : stat.mtime,
+              httpMetadata: metadata.httpMetadata,
+              customMetadata: metadata.customMetadata,
+            })
           );
         }
       }
@@ -368,7 +364,32 @@ export class FileSystemR2Adapter {
   }
 
   async head(key: string): Promise<R2Object | null> {
-    return this.get(key);
+    await this.ensureDirs();
+
+    const filePath = this.getFilePath(key);
+    if (!this.validatePath(filePath)) return null;
+
+    try {
+      const [stat, metadata] = await Promise.all([
+        fs.stat(filePath),
+        this.readMetadata(this.getMetadataPath(key)),
+      ]);
+      if (!stat.isFile()) return null;
+
+      return new R2ObjectImpl(key, {
+        size: stat.size,
+        etag: metadata.etag || `s${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}`,
+        body: null,
+        uploaded: metadata.uploaded ? new Date(metadata.uploaded) : stat.mtime,
+        httpMetadata: metadata.httpMetadata,
+        customMetadata: metadata.customMetadata,
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return null;
+      }
+      throw error;
+    }
   }
 }
 

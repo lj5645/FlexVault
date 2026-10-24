@@ -21,10 +21,21 @@ interface HubUser {
   deviceIdentifiers: Map<WebSocket, string | null>;
 }
 
-function extractAccessToken(req: http.IncomingMessage): string | null {
-  const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
-  const queryToken = String(url.searchParams.get('access_token') || '').trim();
-  if (queryToken) return queryToken;
+export interface NotificationsHubOptions {
+  /**
+   * Deprecated: accept a raw access JWT in the `?access_token=` query string.
+   * Query strings end up in proxy logs and browser history, so this is off by
+   * default; clients should use the one-time `?id=` token or a Bearer header.
+   */
+  allowLegacyQueryToken?: boolean;
+}
+
+function extractAccessToken(req: http.IncomingMessage, allowQueryToken: boolean): string | null {
+  if (allowQueryToken) {
+    const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+    const queryToken = String(url.searchParams.get('access_token') || '').trim();
+    if (queryToken) return queryToken;
+  }
 
   const authHeader = String(req.headers['authorization'] || '').trim();
   const match = authHeader.match(/^Bearer\s+(.+)$/i);
@@ -51,9 +62,16 @@ export class NotificationsHubServer {
   // self-hosted hub keeps the same signed-token security model as Cloudflare Workers.
   private wsConnectionTokens: Map<string, WsConnectionTokenEntry> = new Map();
   private wsTokenLastCleanupAt: number = 0;
+  private allowLegacyQueryToken: boolean;
 
-  constructor(server: http.Server, jwtSecret: string, path: string = '/notifications/hub') {
+  constructor(
+    server: http.Server,
+    jwtSecret: string,
+    path: string = '/notifications/hub',
+    options: NotificationsHubOptions = {}
+  ) {
     this.jwtSecret = jwtSecret;
+    this.allowLegacyQueryToken = options.allowLegacyQueryToken === true;
     this.wss = new WebSocketServer({ server, path });
     this.setupWebSocket();
   }
@@ -96,8 +114,9 @@ export class NotificationsHubServer {
         userId = entry.userId;
         deviceIdentifier = entry.deviceIdentifier;
       } else {
-        // Legacy path: raw access JWT in query or Authorization header
-        const accessToken = extractAccessToken(req);
+        // Legacy path: raw access JWT in the Authorization header (or, only when
+        // explicitly enabled, the deprecated ?access_token= query parameter).
+        const accessToken = extractAccessToken(req, this.allowLegacyQueryToken);
         if (!accessToken) {
           ws.close(1008, 'Unauthorized');
           return;
@@ -322,6 +341,17 @@ export class NotificationsHubServer {
   }
 
   close(): void {
+    for (const user of this.users.values()) {
+      for (const ws of user.sockets) {
+        try {
+          ws.terminate();
+        } catch {
+          // Ignore sockets that already closed.
+        }
+      }
+    }
+    this.users.clear();
+    this.wsConnectionTokens.clear();
     this.wss.close();
   }
 }
@@ -413,8 +443,13 @@ export class NotificationsHubStub {
   }
 }
 
-export function createNotificationsHub(server: http.Server, jwtSecret: string, path?: string): NotificationsHubServer {
-  return new NotificationsHubServer(server, jwtSecret, path);
+export function createNotificationsHub(
+  server: http.Server,
+  jwtSecret: string,
+  path?: string,
+  options?: NotificationsHubOptions
+): NotificationsHubServer {
+  return new NotificationsHubServer(server, jwtSecret, path, options);
 }
 
 export function createNotificationsHubNamespace(server: NotificationsHubServer): NotificationsHubNamespace {
