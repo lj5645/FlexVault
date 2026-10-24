@@ -1,6 +1,6 @@
 # FlexVault
 
-Bitwarden 兼容的自托管密码管理器。基于 [NodeWarden](https://github.com/shuaiplus/nodewarden) 开发，新增 Node.js / Docker 自托管部署能力，同时保持 Cloudflare Workers 部署模式完全兼容。
+Bitwarden 兼容的自托管密码管理器。基于 [NodeWarden](https://github.com/shuaiplus/nodewarden) 开发，提供可独立运行的 Node.js 自托管服务（也可用 Docker 运行），同时保持 Cloudflare Workers 部署模式完全兼容。
 
 > **免责声明**
 > 本项目仅供学习与交流使用，请定期备份你的密码库。
@@ -12,7 +12,7 @@ Bitwarden 兼容的自托管密码管理器。基于 [NodeWarden](https://github
 
 - **Bitwarden 兼容 API** — 支持官方 Bitwarden 客户端（桌面端、移动端、浏览器扩展）
 - **Web Vault** — 包含原创网页密码库界面
-- **双部署模式** — Cloudflare Workers（原始模式）或 Node.js / Docker（自托管模式）
+- **灵活部署** — 同一套服务端代码支持 Node.js（无需 Docker）、Docker 和 Cloudflare Workers 三种方式
 - **SQLite 存储** — 基于 `@libsql/client` 的本地文件数据库，无需外部数据库
 - **文件系统存储** — 附件存储在本地磁盘（R2 兼容适配器）
 - **WebSocket 通知** — 跨设备实时同步（Durable Object 替代方案）
@@ -25,7 +25,88 @@ Bitwarden 兼容的自托管密码管理器。基于 [NodeWarden](https://github
 
 ---
 
-## 快速开始（Docker）
+## 部署方式
+
+同一套服务端代码支持三种部署方式。Docker 不是必需的——容器里运行的也是和本地
+启动脚本完全相同的 Node.js 进程。
+
+| 方式 | 适用场景 | 入口 |
+|------|----------|------|
+| **Node.js**（无需 Docker） | 本地机器、虚拟机、systemd/NSSM 服务 | `start-selfhosted.sh` / `start-selfhosted.bat` |
+| **Docker** | 需要可复现的容器部署 | `Dockerfile.selfhosted` |
+| **Cloudflare Workers** | 无服务器托管 | `wrangler.toml` |
+
+---
+
+## 环境变量
+
+以下变量对 Node.js 和 Docker 两种自托管方式都适用。
+
+| 变量 | 必填 | 默认值 | 说明 |
+|------|------|--------|------|
+| `JWT_SECRET` | 是 | — | JWT 签名密钥，至少 32 个字符 |
+| `DATABASE_PATH` | 否 | `./data/nodewarden.db` | SQLite 数据库文件路径 |
+| `STORAGE_PATH` | 否 | `./data/attachments` | 附件存储目录 |
+| `PORT` | 否 | `3000` | HTTP 监听端口 |
+| `HOST` | 否 | `0.0.0.0` | HTTP 监听地址 |
+| `HIDE_WEB_VAULT` | 否 | — | 设为 `1` 隐藏 Web Vault（API 仍可用） |
+| `FRONTEND_PATH` | 否 | 本地 `./dist`，Docker 内 `/app/dist` | 前端静态文件目录 |
+| `TRUST_PROXY` | 否 | `0` | 仅在受控反向代理后设为 `1`，启用 `X-Forwarded-*` / `X-Real-IP` |
+| `ALLOW_LEGACY_WS_QUERY_TOKEN` | 否 | `0` | 已弃用：允许 WebSocket 查询串携带 access JWT |
+| `MAX_UPLOAD_BYTES` | 否 | `104857600` | 单次请求体/附件上传硬上限 |
+| `WEBAUTHN_RP_ID` | 否 | — | WebAuthn 依赖方 ID（公网域名） |
+| `WEBAUTHN_RP_NAME` | 否 | `NodeWarden` | WebAuthn 依赖方显示名称 |
+| `WEBAUTHN_ALLOWED_ORIGINS` | 否 | — | 允许官方客户端使用 WebAuthn 的来源，逗号分隔 |
+
+---
+
+## 本地部署（Node.js）
+
+不需要 Docker，直接用 Node.js 运行服务，数据库和附件保存在本地文件。
+
+要求：Node.js **22.19+（22.x 系列）**或 **24.11+**，以及 npm。
+
+```bash
+git clone https://github.com/lj5645/FlexVault.git
+cd FlexVault
+
+npm install
+npm run build                  # 构建 Web Vault 到 ./dist
+
+cp .env.selfhosted.example .env   # Windows 用户：.bat 首次运行会自动创建
+# 编辑 .env，把 JWT_SECRET 改成至少 32 个字符的随机字符串
+
+# Linux / macOS
+./start-selfhosted.sh
+
+# Windows（在命令提示符中运行，或直接双击 .bat 文件）
+start-selfhosted.bat
+```
+
+打开 `http://localhost:3000` 创建管理员账号。
+
+启动脚本会自动加载 `.env`。首次运行时如果 `.env` 不存在，脚本会复制
+`.env.selfhosted.example`、给出提示后退出；编辑好文件再运行一次即可。
+
+默认路径：
+
+- Web Vault：`./dist`（`FRONTEND_PATH`）
+- 数据库：`./data/nodewarden.db`（`DATABASE_PATH`）
+- 附件：`./data/attachments`（`STORAGE_PATH`）
+
+设置 `HIDE_WEB_VAULT=1` 可以只提供 API、不提供网页界面。生产环境建议用
+systemd、pm2 或 NSSM 托管进程，并在前面配置 HTTPS（见
+[反向代理与 HTTPS](#反向代理与-https)）。
+
+如果你想手动启动：
+
+```bash
+npx tsx --loader ./src/selfhosted/cloudflare-workers-loader.mjs ./src/selfhosted/index.ts
+```
+
+---
+
+## Docker 部署
 
 ```bash
 docker run -d \
@@ -38,28 +119,11 @@ docker run -d \
 ```
 
 打开 `http://localhost:3000` 创建管理员账号。镜像已内置 Web Vault
-（`FRONTEND_PATH=/app/dist`），单容器即可同时提供界面和 API。
+（`FRONTEND_PATH=/app/dist`），单容器即可同时提供界面和 API。镜像运行的
+就是与本地启动脚本相同的 Node.js 服务。
 
 > 从其他机器访问时必须使用 HTTPS：浏览器只在安全上下文中提供
 > `crypto.subtle`（客户端加密依赖它）。参见[反向代理与 HTTPS](#反向代理与-https)。
-
-### 环境变量
-
-| 变量 | 必填 | 默认值 | 说明 |
-|------|------|--------|------|
-| `JWT_SECRET` | 是 | — | JWT 签名密钥，至少 32 个字符 |
-| `DATABASE_PATH` | 否 | `./data/nodewarden.db` | SQLite 数据库文件路径 |
-| `STORAGE_PATH` | 否 | `./data/attachments` | 附件存储目录 |
-| `PORT` | 否 | `3000` | HTTP 监听端口 |
-| `HOST` | 否 | `0.0.0.0` | HTTP 监听地址 |
-| `HIDE_WEB_VAULT` | 否 | — | 设为 `1` 隐藏 Web Vault（API 仍可用） |
-| `FRONTEND_PATH` | 否 | Docker 内为 `/app/dist` | 前端静态文件目录 |
-| `TRUST_PROXY` | 否 | `0` | 仅在受控反向代理后设为 `1`，启用 `X-Forwarded-*` / `X-Real-IP` |
-| `ALLOW_LEGACY_WS_QUERY_TOKEN` | 否 | `0` | 已弃用：允许 WebSocket 查询串携带 access JWT |
-| `MAX_UPLOAD_BYTES` | 否 | `104857600` | 单次请求体/附件上传硬上限 |
-| `WEBAUTHN_RP_ID` | 否 | — | WebAuthn 依赖方 ID（公网域名） |
-| `WEBAUTHN_RP_NAME` | 否 | `NodeWarden` | WebAuthn 依赖方显示名称 |
-| `WEBAUTHN_ALLOWED_ORIGINS` | 否 | — | 允许官方客户端使用 WebAuthn 的来源，逗号分隔 |
 
 ---
 
@@ -137,24 +201,6 @@ FlexVault 会忽略 `X-Forwarded-*` / `X-Real-IP` 并使用 socket 地址，防�
 ```bash
 docker build -f Dockerfile.selfhosted -t flexvault:latest .
 ```
-
----
-
-## 本地开发（Node.js）
-
-```bash
-git clone https://github.com/lj5645/FlexVault.git
-cd FlexVault
-npm install
-
-# 设置必需的环境变量
-export JWT_SECRET="your-secret-at-least-32-chars"
-
-# 使用 tsx 运行
-npx tsx --loader ./src/selfhosted/cloudflare-workers-loader.mjs ./src/selfhosted/index.ts
-```
-
-需要 Node.js 22+。
 
 ---
 

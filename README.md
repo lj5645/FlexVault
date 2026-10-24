@@ -1,6 +1,6 @@
 # FlexVault
 
-Bitwarden-compatible self-hosted password manager. Fork of [NodeWarden](https://github.com/shuaiplus/nodewarden) with added Node.js / Docker self-hosted deployment support, while keeping full Cloudflare Workers compatibility.
+Bitwarden-compatible self-hosted password manager. Fork of [NodeWarden](https://github.com/shuaiplus/nodewarden) with a Node.js self-hosted server that also runs in Docker, while keeping full Cloudflare Workers compatibility.
 
 [中文文档](./README_ZH.md)
 
@@ -14,7 +14,7 @@ Bitwarden-compatible self-hosted password manager. Fork of [NodeWarden](https://
 
 - **Bitwarden-compatible API** — works with official Bitwarden clients (desktop, mobile, browser extension)
 - **Web Vault** — original web UI included
-- **Dual deployment modes** — Cloudflare Workers (original) or Node.js / Docker (self-hosted)
+- **Flexible deployment** — run the same server on Node.js (no Docker), in Docker, or on Cloudflare Workers
 - **SQLite storage** — local file-based database via `@libsql/client`, no external DB required
 - **File system storage** — attachments stored on local disk (R2-compatible adapter)
 - **WebSocket notifications** — real-time sync across devices (Durable Object replacement)
@@ -27,7 +27,90 @@ Bitwarden-compatible self-hosted password manager. Fork of [NodeWarden](https://
 
 ---
 
-## Quick Start (Docker)
+## Deployment Options
+
+The same server code supports three deployment modes. Docker is optional — the
+container runs the exact same Node.js process as the local start scripts.
+
+| Mode | Best for | Entry point |
+|------|----------|-------------|
+| **Node.js** (no Docker) | Local machines, VMs, systemd/NSSM services | `start-selfhosted.sh` / `start-selfhosted.bat` |
+| **Docker** | Reproducible container deployments | `Dockerfile.selfhosted` |
+| **Cloudflare Workers** | Serverless hosting | `wrangler.toml` |
+
+---
+
+## Environment Variables
+
+These apply to both the Node.js and Docker self-hosted modes.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `JWT_SECRET` | Yes | — | JWT signing secret, at least 32 characters |
+| `DATABASE_PATH` | No | `./data/nodewarden.db` | SQLite database file path |
+| `STORAGE_PATH` | No | `./data/attachments` | Attachment storage directory |
+| `PORT` | No | `3000` | HTTP listen port |
+| `HOST` | No | `0.0.0.0` | HTTP listen host |
+| `HIDE_WEB_VAULT` | No | — | Set to `1` to hide the Web Vault (API still works) |
+| `FRONTEND_PATH` | No | `./dist` locally, `/app/dist` in Docker | Frontend static file directory |
+| `TRUST_PROXY` | No | `0` | Set to `1` only behind a proxy you control; enables `X-Forwarded-*` and `X-Real-IP` |
+| `ALLOW_LEGACY_WS_QUERY_TOKEN` | No | `0` | Deprecated: accept access JWTs in the WebSocket query string |
+| `MAX_UPLOAD_BYTES` | No | `104857600` | Hard cap for a request body / attachment upload |
+| `WEBAUTHN_RP_ID` | No | — | WebAuthn relying party ID (public hostname) |
+| `WEBAUTHN_RP_NAME` | No | `NodeWarden` | WebAuthn relying party display name |
+| `WEBAUTHN_ALLOWED_ORIGINS` | No | — | Comma-separated WebAuthn origins allowed for official clients |
+
+---
+
+## Local Deployment (Node.js)
+
+Docker is not required. Run the server directly with Node.js; the database and
+attachments stay in local files.
+
+Requirements: Node.js **22.19+ (22.x)** or **24.11+**, and npm.
+
+```bash
+git clone https://github.com/lj5645/FlexVault.git
+cd FlexVault
+
+npm install
+npm run build                  # build the Web Vault into ./dist
+
+cp .env.selfhosted.example .env   # Windows: the .bat file creates it on first run
+# Edit .env and set JWT_SECRET to a random string of at least 32 characters.
+
+# Linux / macOS
+./start-selfhosted.sh
+
+# Windows (Command Prompt, or double-click the .bat file)
+start-selfhosted.bat
+```
+
+Open `http://localhost:3000` and create your admin account.
+
+The start scripts load `.env` automatically. On the first run, if `.env` does
+not exist, they copy `.env.selfhosted.example`, print a reminder, and exit;
+edit the file and run the script again.
+
+Default paths:
+
+- Web Vault: `./dist` (`FRONTEND_PATH`)
+- Database: `./data/nodewarden.db` (`DATABASE_PATH`)
+- Attachments: `./data/attachments` (`STORAGE_PATH`)
+
+Set `HIDE_WEB_VAULT=1` to serve the API only. To keep it running in production,
+use systemd, pm2, or NSSM, and put HTTPS in front of it (see
+[Reverse proxy and HTTPS](#reverse-proxy-and-https)).
+
+If you prefer to start it manually:
+
+```bash
+npx tsx --loader ./src/selfhosted/cloudflare-workers-loader.mjs ./src/selfhosted/index.ts
+```
+
+---
+
+## Docker Deployment
 
 ```bash
 docker run -d \
@@ -41,29 +124,11 @@ docker run -d \
 
 Open `http://localhost:3000` and create your admin account. The image bundles the
 Web Vault (`FRONTEND_PATH=/app/dist`), so a single container serves both the UI
-and the API.
+and the API. The image runs the same Node.js server as the local start scripts.
 
 > Accessing FlexVault from another machine requires HTTPS: browsers only expose
 > `crypto.subtle` (used for client-side vault encryption) in a secure context.
 > See [Reverse proxy and HTTPS](#reverse-proxy-and-https).
-
-### Environment Variables
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `JWT_SECRET` | Yes | — | JWT signing secret, at least 32 characters |
-| `DATABASE_PATH` | No | `./data/nodewarden.db` | SQLite database file path |
-| `STORAGE_PATH` | No | `./data/attachments` | Attachment storage directory |
-| `PORT` | No | `3000` | HTTP listen port |
-| `HOST` | No | `0.0.0.0` | HTTP listen host |
-| `HIDE_WEB_VAULT` | No | — | Set to `1` to hide the Web Vault (API still works) |
-| `FRONTEND_PATH` | No | `/app/dist` in Docker | Frontend static file directory |
-| `TRUST_PROXY` | No | `0` | Set to `1` only behind a proxy you control; enables `X-Forwarded-*` and `X-Real-IP` |
-| `ALLOW_LEGACY_WS_QUERY_TOKEN` | No | `0` | Deprecated: accept access JWTs in the WebSocket query string |
-| `MAX_UPLOAD_BYTES` | No | `104857600` | Hard cap for a request body / attachment upload |
-| `WEBAUTHN_RP_ID` | No | — | WebAuthn relying party ID (public hostname) |
-| `WEBAUTHN_RP_NAME` | No | `NodeWarden` | WebAuthn relying party display name |
-| `WEBAUTHN_ALLOWED_ORIGINS` | No | — | Comma-separated WebAuthn origins allowed for official clients |
 
 ---
 
@@ -145,24 +210,6 @@ To build locally:
 ```bash
 docker build -f Dockerfile.selfhosted -t flexvault:latest .
 ```
-
----
-
-## Local Development (Node.js)
-
-```bash
-git clone https://github.com/lj5645/FlexVault.git
-cd FlexVault
-npm install
-
-# Set required env
-export JWT_SECRET="your-secret-at-least-32-chars"
-
-# Run with tsx
-npx tsx --loader ./src/selfhosted/cloudflare-workers-loader.mjs ./src/selfhosted/index.ts
-```
-
-Requires Node.js 22+.
 
 ---
 
