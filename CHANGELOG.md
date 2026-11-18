@@ -4,6 +4,14 @@
 
 本仓库在 [NodeWarden](https://github.com/shuaiplus/nodewarden) 基础上新增了 Node.js 自托管部署能力，并保持与 Cloudflare Workers 部署模式完全兼容。
 
+### 发布（2026-11-18, 镜像 `1.8.4`）
+
+- `docker.yml` 支持选择推送目标（`target`: `ghcr` / `aliyun`，默认 `ghcr`），GitHub Container Registry 使用内置 `GITHUB_TOKEN`（`packages: write`），不再依赖阿里云凭据
+- GitHub Actions 运行 [44225740712](https://github.com/lj5645/FlexVault/actions/runs/44225740712) 全部通过：`build (amd64)`、`build (arm64)`、`merge`、`verify-image`
+- 推送 GHCR：`ghcr.io/lj5645/flexvault:latest`、`ghcr.io/lj5645/flexvault:1.8.4`，多架构 manifest digest `sha256:513de5e4a288be13251deaa730a69100946ac8dff0914c8ddf5793ebde7f1934`
+- 拉取命令：`docker pull ghcr.io/lj5645/flexvault:1.8.4`
+- 阿里云 ACR 推送仍失败于登录 401（`ALIYUN_PASSWORD` 失效，待重置固定密码后以 `target=aliyun` 重跑）
+
 ### 同步上游（2026-11-18, 合并 `29c2de8`）
 
 - 合并上游 6 个提交：文件夹创建与嵌套（`VaultSidebar`/`VaultDialogs`/`VaultPage` 与新增 `webapp/src/lib/folder-tree.ts`、`vault.css`、11 个语言包文案）、Bitwarden 客户端 user key id 回填（`/api/accounts/key-management/user-key-id` 写一次存 `users.user_key_id`，`/api/sync` 以 `UserDecryption.UserKeyId` 返回，含并发回填安全处理）、Bitwarden Desktop Windows 原生 passkey、undici 安全更新
