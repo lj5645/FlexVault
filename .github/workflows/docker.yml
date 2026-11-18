@@ -11,9 +11,9 @@ on:
         description: 'Registry to push to'
         type: choice
         options:
-          - ghcr
           - aliyun
-        default: ghcr
+          - ghcr
+        default: aliyun
 
 permissions:
   contents: read

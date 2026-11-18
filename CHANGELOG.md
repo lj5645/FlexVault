@@ -6,11 +6,12 @@
 
 ### 发布（2026-11-18, 镜像 `1.8.4`）
 
-- `docker.yml` 支持选择推送目标（`target`: `ghcr` / `aliyun`，默认 `ghcr`），GitHub Container Registry 使用内置 `GITHUB_TOKEN`（`packages: write`），不再依赖阿里云凭据
+- `docker.yml` 支持选择推送目标（`target`: `aliyun` / `ghcr`，默认 `aliyun`），GitHub Container Registry 使用内置 `GITHUB_TOKEN`（`packages: write`）
 - GitHub Actions 运行 [44225740712](https://github.com/lj5645/FlexVault/actions/runs/44225740712) 全部通过：`build (amd64)`、`build (arm64)`、`merge`、`verify-image`
 - 推送 GHCR：`ghcr.io/lj5645/flexvault:latest`、`ghcr.io/lj5645/flexvault:1.8.4`，多架构 manifest digest `sha256:513de5e4a288be13251deaa730a69100946ac8dff0914c8ddf5793ebde7f1934`
 - 拉取命令：`docker pull ghcr.io/lj5645/flexvault:1.8.4`
-- 阿里云 ACR 推送仍失败于登录 401（`ALIYUN_PASSWORD` 失效，待重置固定密码后以 `target=aliyun` 重跑）
+- 阿里云 ACR 凭据（`ALIYUN_PASSWORD`）重置后，运行 [44226506889](https://github.com/lj5645/FlexVault/actions/runs/44226506889) 推送成功：`flexvault:latest`、`flexvault:1.8.4`，digest 与 GHCR 一致
+- 拉取命令：`docker pull registry.cn-guangzhou.aliyuncs.com/myskyts/flexvault:1.8.4`
 
 ### 同步上游（2026-11-18, 合并 `29c2de8`）
 
