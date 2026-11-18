@@ -4,7 +4,16 @@
 
 本仓库在 [NodeWarden](https://github.com/shuaiplus/nodewarden) 基础上新增了 Node.js 自托管部署能力，并保持与 Cloudflare Workers 部署模式完全兼容。
 
-### 修复（2026-11-01, commit 待提交）
+### 同步上游（2026-11-18, 合并 `29c2de8`）
+
+- 合并上游 6 个提交：文件夹创建与嵌套（`VaultSidebar`/`VaultDialogs`/`VaultPage` 与新增 `webapp/src/lib/folder-tree.ts`、`vault.css`、11 个语言包文案）、Bitwarden 客户端 user key id 回填（`/api/accounts/key-management/user-key-id` 写一次存 `users.user_key_id`，`/api/sync` 以 `UserDecryption.UserKeyId` 返回，含并发回填安全处理）、Bitwarden Desktop Windows 原生 passkey、undici 安全更新
+- 冲突处理：`package.json` / `package-lock.json` 仅 `undici` override 一处冲突，保留本地较新的 `8.12.3`（上游为 8.12.2）；自托管依赖（`@libsql/client`、`dotenv`、`node-cron`、`ws` 及类型包）与 `uuid: 11.1.1` 全部保留
+- 数据库：新增 `users.user_key_id` 列（`migrations/0001_init.sql` 与运行时 `storage-schema.ts` 同步），自托管 SQLite 通过 `ALTER TABLE` 自动补列，重复列错误已被忽略，存量库可直接升级
+- 自托管代码零改动：`src/selfhosted/` 与 README 均未涉及本次上游变更
+- 验证通过：`npm ci`（npm 10.9.8）、`tsc -p tsconfig.selfhosted.json --noEmit`、前端构建（1.05s）、自托管测试 25 例、config 1 / vault-compatibility 20 / web-crypto 4 / notifications 5 / webauthn 3 全部通过、冒烟测试 `/`、`/api/config`、`/vault`、`/robots.txt` 均 200 且带 `X-Robots-Tag`
+- 已知上游问题：`package.json` 新增的 `test:folder-tree` 脚本指向不存在的 `scripts/folder-tree.test.ts`（上游未提交该文件），`npm run test:folder-tree` 会报找不到文件；CI 未引用此脚本，不影响构建与自托管
+
+### 修复（2026-11-01, commit `be8f1c9`、`f73b3f7`）
 
 - 修复 `NotificationsHubStub.fetch()` 收到 `Request` 对象时抛 `Invalid URL` 的问题（`Request.toString()` 返回 `[object Request]`，与 `createAssetsHandler` 历史 bug 同型）：改用与 `BackupTransferRunnerStub` 一致的解析方式（string / URL / Request 三种输入），并移除永不可达的完整 URL 兜底路径分支
 - 自托管 Web Vault 的 HTML 与 robots.txt 响应补充 `X-Robots-Tag: noindex, nofollow, noarchive, nosnippet` 头（`addSearchIndexHeaders` 定义于 `env.ts`），与 Workers 入口行为一致
@@ -13,6 +22,12 @@
 - `consumeWsConnectionToken` / `storeWsConnectionToken` 的过期判断由 `<` 改为 `<=`，与上游 Durable Object 对齐
 - push relay 网络或 HTTP 失败后退避 5 分钟（`push-relay.ts` 模块内状态，四个入口短路），缓解离线自托管环境下每次密码库通知都触发 5 秒超时加错误日志的问题
 - 新增 7 个测试用例（stub Request 对象回归、anonymous-hub 校验/广播、MessagePack 二进制帧、X-Robots-Tag），自托管测试组 25 例、全部测试组 58 例通过
+
+### 发布（2026-11-01, 镜像 `1.8.3`）
+
+- GitHub Actions 运行 [41288887620](https://github.com/lj5645/FlexVault/actions/runs/41288887620) 全部通过：`build (amd64)`、`build (arm64)` 原生构建 + `merge` 合并多架构 manifest + `verify-image` 容器冒烟测试
+- 推送阿里云 ACR：`flexvault:latest`、`flexvault:1.8.3`，多架构 manifest digest `sha256:a702ce6a4f8fd29335234999fabcf7395797a87315b8cefcde1877f9100f151b`（amd64 `d319593`、arm64 `82eb653`）
+- 拉取命令：`docker pull registry.cn-guangzhou.aliyuncs.com/myskyts/flexvault:1.8.3`
 
 ### 同步上游（2026-11-01, commit `db9a4dd`）
 - 合并上游提交 `fbc0e65`「fix(tooling): require patched Node.js security releases (#415)」，仅涉及工具链与依赖：
